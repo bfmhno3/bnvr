@@ -11,17 +11,17 @@
 
 ## Phase 2: Daemon Lifecycle (Start/Stop/Status)
 
-- [ ] Implement `bnvr daemon start` -- spawn a tokio runtime that stays alive ~2d #feat
-  - [ ] PID file write to `~/.bnvr/bnvr.pid`
-  - [ ] Log to file via tracing-appender
-- [ ] Implement `bnvr daemon stop` -- read PID file, send shutdown signal ~1d #feat
-- [ ] Implement `bnvr daemon status` -- check if daemon process is alive ~0.5d #feat
-- [ ] SQLite DB setup (rusqlite) ~1d #feat
-  - [ ] Create DB at `~/.bnvr/bnvr.db`
-  - [ ] Schema: profiles, subscriptions, audit_log, bench_results, traffic_stats
-- [ ] IPC foundation: create Unix socket listener (Linux) or Named Pipe (Windows) ~2d #feat
-  - [ ] Define a simple JSON message protocol (request/response)
-  - [ ] Daemon listens; client connects and sends commands
+- [x] Implement `bnvr daemon start` -- spawn a tokio runtime that stays alive ~2d #feat
+  - [x] PID file write to `~/.bnvr/bnvr.pid`
+  - [x] Log to file via tracing-appender
+- [x] Implement `bnvr daemon stop` -- read PID file, send shutdown signal ~1d #feat
+- [x] Implement `bnvr daemon status` -- check if daemon process is alive ~0.5d #feat
+- [x] SQLite DB setup (rusqlite) ~1d #feat
+  - [x] Create DB at `~/.bnvr/bnvr.db`
+  - [x] Schema: profiles, subscriptions, audit_log, bench_results, traffic_stats
+- [x] IPC foundation: use interprocess crate for cross-platform local sockets ~2d #feat
+  - [x] Define a simple JSON message protocol (request/response)
+  - [x] Daemon listens; client connects and sends commands
 
 ## Phase 3: TUI Shell (Attach & Detach)
 

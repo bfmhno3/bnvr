@@ -1,5 +1,6 @@
 mod cli;
 
+use bnvr::daemon;
 use clap::Parser;
 use cli::{
     Cli, Commands, DaemonAction, KernelAction, NetworkAction, OverwriteAction, ProfileAction,
@@ -7,13 +8,9 @@ use cli::{
 };
 use tracing::info;
 
-fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+#[tokio::main]
+async fn main() {
+    daemon::tracing_init::init();
 
     let cli = Cli::parse();
     info!("bnvr starting");
@@ -24,9 +21,24 @@ fn main() {
         }
         Some(cmd) => match cmd {
             Commands::Daemon { action } => match action {
-                DaemonAction::Start => println!("daemon start"),
-                DaemonAction::Stop => println!("daemon stop"),
-                DaemonAction::Status => println!("daemon status"),
+                DaemonAction::Start => {
+                    if let Err(e) = daemon::start::run().await {
+                        eprintln!("daemon start failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                DaemonAction::Stop => {
+                    if let Err(e) = daemon::stop::run() {
+                        eprintln!("daemon stop failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                DaemonAction::Status => {
+                    if let Err(e) = daemon::status::run() {
+                        eprintln!("daemon status failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
             },
             Commands::Kernel { action } => match action {
                 KernelAction::List => println!("kernel list"),

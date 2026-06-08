@@ -76,7 +76,10 @@ pub enum KernelAction {
     /// List installed and available kernels
     List,
     /// Download and install a kernel version
-    Install,
+    Install {
+        /// Version to install (e.g. v1.19.27). Fetches latest if omitted.
+        version: Option<String>,
+    },
     /// Switch active kernel version
     Use {
         /// Version to activate

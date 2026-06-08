@@ -1,6 +1,7 @@
 mod cli;
 
 use bnvr::daemon;
+use bnvr::kernel;
 use clap::Parser;
 use cli::{
     Cli, Commands, DaemonAction, KernelAction, NetworkAction, OverwriteAction, ProfileAction,
@@ -41,10 +42,49 @@ async fn main() {
                 }
             },
             Commands::Kernel { action } => match action {
-                KernelAction::List => println!("kernel list"),
-                KernelAction::Install => println!("kernel install"),
-                KernelAction::Use { version } => println!("kernel use {}", version),
-                KernelAction::Status => println!("kernel status"),
+                KernelAction::List => {
+                    let installed = kernel::manage::list_installed();
+                    if installed.is_empty() {
+                        println!("no kernels installed");
+                    } else {
+                        for k in &installed {
+                            let marker = if k.active { " *" } else { "" };
+                            let status = if k.binary_exists { "ok" } else { "missing binary" };
+                            println!("  {} [{}]{}", k.version, status, marker);
+                        }
+                    }
+                }
+                KernelAction::Install { version } => {
+                    let ver = version.as_deref().unwrap_or("latest");
+                    match kernel::download::download_and_extract(ver).await {
+                        Ok(path) => println!("done: {}", path.display()),
+                        Err(e) => {
+                            eprintln!("install failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                KernelAction::Use { version } => {
+                    if let Err(e) = kernel::manage::set_active(&version) {
+                        eprintln!("failed: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("active kernel set to {}", version);
+                }
+                KernelAction::Status => {
+                    let s = kernel::manage::kernel_status();
+                    match s.active_version {
+                        Some(ref v) => {
+                            println!("active: {}", v);
+                            if s.binary_exists {
+                                println!("binary: {}", s.binary_path.unwrap().display());
+                            } else {
+                                println!("binary: missing");
+                            }
+                        }
+                        None => println!("no active kernel"),
+                    }
+                }
             },
             Commands::Profile { action } => match action {
                 ProfileAction::Add { url, name } => println!("profile add {} {}", url, name),

@@ -1,7 +1,7 @@
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub fn init() {
-    let log_dir = super::paths::log_dir();
+    let log_dir = crate::paths::log_dir();
     let file_appender = tracing_appender::rolling::daily(&log_dir, "bnvr.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 

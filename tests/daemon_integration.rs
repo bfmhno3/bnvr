@@ -1,4 +1,5 @@
-use bnvr::daemon::{db, ipc, paths};
+use bnvr::daemon::{db, ipc};
+use bnvr::paths;
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use interprocess::local_socket::traits::tokio::Stream as _;

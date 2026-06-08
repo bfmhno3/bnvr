@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use super::paths;
+use crate::paths;
 
 pub fn open() -> Result<Connection, Box<dyn std::error::Error>> {
     let db_path = paths::db_file();

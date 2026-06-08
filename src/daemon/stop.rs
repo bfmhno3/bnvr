@@ -1,4 +1,5 @@
-use super::{paths, process};
+use crate::paths;
+use super::process;
 use std::fs;
 use std::thread;
 use std::time::Duration;

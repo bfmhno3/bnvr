@@ -2,12 +2,12 @@
 
 ## Phase 1: Project Skeleton & CLI Shell
 
-- [ ] Add core dependencies to Cargo.toml (clap, tokio, serde, serde_json, tracing, tracing-subscriber, rusqlite, reqwest) ~1d #setup
-- [ ] Set up clap derive-based CLI with 2-level subcommand structure ~2d #feat
-  - [ ] Define top-level commands: `daemon`, `kernel`, `profile`, `overwrite`, `network`, `bench`, `stats`, `query`
-  - [ ] Wire `bnvr` (no args) and `bnvr tldr` stubs
-- [ ] Set up tracing subscriber for structured logging ~0.5d #feat
-- [ ] Verify cargo build and cargo test pass ~0.5d #infra
+- [x] Add core dependencies to Cargo.toml (clap, tokio, serde, serde_json, tracing, tracing-subscriber, rusqlite, reqwest) ~1d #setup
+- [x] Set up clap derive-based CLI with 2-level subcommand structure ~2d #feat
+  - [x] Define top-level commands: `daemon`, `kernel`, `profile`, `overwrite`, `network`, `bench`, `stats`, `query`
+  - [x] Wire `bnvr` (no args) and `bnvr tldr` stubs
+- [x] Set up tracing subscriber for structured logging ~0.5d #feat
+- [x] Verify cargo build and cargo test pass ~0.5d #infra
 
 ## Phase 2: Daemon Lifecycle (Start/Stop/Status)
 

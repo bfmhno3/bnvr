@@ -18,7 +18,10 @@ async fn main() {
 
     match cli.command {
         None => {
-            println!("Launching TUI (not implemented yet)");
+            if let Err(e) = bnvr::tui::run().await {
+                eprintln!("TUI error: {e}");
+                std::process::exit(1);
+            }
         }
         Some(cmd) => match cmd {
             Commands::Daemon { action } => match action {

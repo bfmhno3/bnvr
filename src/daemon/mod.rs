@@ -1,3 +1,4 @@
+pub mod core;
 pub mod db;
 pub mod ipc;
 pub mod process;

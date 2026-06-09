@@ -13,6 +13,7 @@ pub struct KernelStatus {
     pub active_version: Option<String>,
     pub binary_path: Option<PathBuf>,
     pub binary_exists: bool,
+    pub pid: Option<u32>,
 }
 
 pub fn read_active() -> Option<String> {
@@ -65,8 +66,78 @@ pub fn list_installed() -> Vec<KernelInfo> {
     result
 }
 
+/// Find the PID of a running mihomo process by scanning for its binary name.
+pub fn running_pid() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        // Use Windows toolhelp32 to enumerate processes
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
+        };
+        use windows_sys::Win32::Foundation::CloseHandle;
+        const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot.is_null() {
+                return None;
+            }
+
+            let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+
+            if Process32First(snapshot, &mut entry) != 0 {
+                loop {
+                    let name = std::ffi::CStr::from_ptr(
+                        entry.szExeFile.as_ptr() as *const std::ffi::c_char,
+                    );
+                    if name.to_string_lossy().contains("mihomo") {
+                        let _ = CloseHandle(snapshot);
+                        return Some(entry.th32ProcessID);
+                    }
+                    if Process32Next(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+
+            let _ = CloseHandle(snapshot);
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        // Scan /proc for mihomo process
+        let proc_dir = std::path::Path::new("/proc");
+        let entries = fs::read_dir(proc_dir).ok()?;
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let pid_str = name.to_string_lossy();
+            let pid: u32 = match pid_str.parse() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let exe_link = entry.path().join("exe");
+            if let Ok(exe_path) = fs::read_link(&exe_link) {
+                if exe_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().contains("mihomo"))
+                    .unwrap_or(false)
+                {
+                    return Some(pid);
+                }
+            }
+        }
+        None
+    }
+}
+
 pub fn kernel_status() -> KernelStatus {
     let active = read_active();
+    let pid = running_pid();
     match active {
         Some(ref version) => {
             let path = paths::kernel_binary_path(version);
@@ -74,12 +145,37 @@ pub fn kernel_status() -> KernelStatus {
                 active_version: Some(version.clone()),
                 binary_exists: path.exists(),
                 binary_path: Some(path),
+                pid,
             }
         }
         None => KernelStatus {
             active_version: None,
             binary_path: None,
             binary_exists: false,
+            pid,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_running_pid_returns_option() {
+        // running_pid() should return Some if mihomo is running, None otherwise
+        let pid = running_pid();
+        // We can't assert a specific value since it depends on system state
+        // but we can verify it doesn't panic
+        if let Some(p) = pid {
+            assert!(p > 0);
+        }
+    }
+
+    #[test]
+    fn test_kernel_status_includes_pid() {
+        let status = kernel_status();
+        // pid field should be populated (either Some or None)
+        let _ = status.pid;
     }
 }

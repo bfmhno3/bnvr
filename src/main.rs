@@ -87,6 +87,10 @@ async fn main() {
                         }
                         None => println!("no active kernel"),
                     }
+                    match s.pid {
+                        Some(pid) => println!("running: pid {}", pid),
+                        None => println!("running: not running"),
+                    }
                 }
             },
             Commands::Profile { action } => match action {

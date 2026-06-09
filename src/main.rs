@@ -2,6 +2,7 @@ mod cli;
 
 use bnvr::daemon;
 use bnvr::kernel;
+use bnvr::profile;
 use clap::Parser;
 use cli::{
     Cli, Commands, DaemonAction, KernelAction, NetworkAction, OverwriteAction, ProfileAction,
@@ -93,21 +94,124 @@ async fn main() {
                     }
                 }
             },
-            Commands::Profile { action } => match action {
-                ProfileAction::Add { url, name } => println!("profile add {} {}", url, name),
-                ProfileAction::Del { name } => println!("profile del {}", name),
-                ProfileAction::List => println!("profile list"),
-                ProfileAction::Sync { name } => {
-                    println!("profile sync {}", name.unwrap_or_default())
+            Commands::Profile { action } => {
+                if let Err(e) = bnvr::paths::ensure_dirs() {
+                    eprintln!("failed to create directories: {e}");
+                    std::process::exit(1);
                 }
-                ProfileAction::View { path } => {
-                    println!("profile view {}", path.unwrap_or_default())
+                let conn = match daemon::db::open() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("failed to open database: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                match action {
+                    ProfileAction::Add { url, name } => {
+                        if let Err(e) = profile::crud::add(&conn, &name, &url) {
+                            eprintln!("failed to add profile: {e}");
+                            std::process::exit(1);
+                        }
+                        println!("profile '{}' added", name);
+                    }
+                    ProfileAction::Del { name } => {
+                        if let Err(e) = profile::crud::del(&conn, &name) {
+                            eprintln!("failed to delete profile: {e}");
+                            std::process::exit(1);
+                        }
+                        println!("profile '{}' deleted", name);
+                    }
+                    ProfileAction::List => {
+                        match profile::crud::list(&conn) {
+                            Ok(profiles) => {
+                                if profiles.is_empty() {
+                                    println!("no profiles configured");
+                                } else {
+                                    for p in &profiles {
+                                        let sync_status = if p.raw_config.is_some() { "synced" } else { "not synced" };
+                                        println!("  {} [{}] {}", p.name, sync_status, p.url);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("failed to list profiles: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    ProfileAction::Sync { name } => {
+                        match name {
+                            Some(n) => {
+                                match profile::sync::sync_one(&conn, &n).await {
+                                    Ok(r) => println!("synced '{}': {} bytes", r.name, r.bytes),
+                                    Err(e) => {
+                                        eprintln!("sync failed: {e}");
+                                        std::process::exit(1);
+                                    }
+                                }
+                            }
+                            None => {
+                                match profile::sync::sync_all(&conn).await {
+                                    Ok(results) => {
+                                        if results.is_empty() {
+                                            println!("no profiles to sync");
+                                        } else {
+                                            for r in &results {
+                                                println!("synced '{}': {} bytes", r.name, r.bytes);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("sync failed: {e}");
+                                        std::process::exit(1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ProfileAction::View { path } => {
+                        // Default to first profile if no name specified
+                        let profiles = match profile::crud::list(&conn) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("failed to list profiles: {e}");
+                                std::process::exit(1);
+                            }
+                        };
+                        if profiles.is_empty() {
+                            eprintln!("no profiles configured");
+                            std::process::exit(1);
+                        }
+                        let name = &profiles[0].name;
+                        if let Err(e) = profile::view::view(&conn, name, path.as_deref()) {
+                            eprintln!("view failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    ProfileAction::Diff => {
+                        let profiles = match profile::crud::list(&conn) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("failed to list profiles: {e}");
+                                std::process::exit(1);
+                            }
+                        };
+                        if profiles.is_empty() {
+                            eprintln!("no profiles configured");
+                            std::process::exit(1);
+                        }
+                        let name = &profiles[0].name;
+                        if let Err(e) = profile::diff::diff(&conn, name) {
+                            eprintln!("diff failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    ProfileAction::Merge { .. } => {
+                        eprintln!("merge not yet implemented");
+                        std::process::exit(1);
+                    }
                 }
-                ProfileAction::Diff => println!("profile diff"),
-                ProfileAction::Merge { profiles, out } => {
-                    println!("profile merge {:?} {:?}", profiles, out)
-                }
-            },
+            }
             Commands::Overwrite { action } => match action {
                 OverwriteAction::Init { name } => println!("overwrite init {}", name),
                 OverwriteAction::List => println!("overwrite list"),

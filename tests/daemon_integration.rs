@@ -11,7 +11,7 @@ fn start_test_listener(
     socket_name: &str,
 ) -> tokio::task::JoinHandle<Result<(), String>> {
     let name = socket_name.to_string();
-    tokio::spawn(async move { ipc::listen_on(&name).await.map_err(|e| e.to_string()) })
+    tokio::spawn(async move { ipc::listen_on(&name, None).await.map_err(|e| e.to_string()) })
 }
 
 // Helper: connect to a test socket and send a request, return the response

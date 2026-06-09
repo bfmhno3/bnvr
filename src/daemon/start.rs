@@ -1,6 +1,8 @@
 use crate::paths;
+use super::core::KernelManager;
 use super::process;
 use std::fs;
+use std::sync::Arc;
 use tracing::{error, info};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,9 +24,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(&pid_path, pid.to_string())?;
     info!(pid, "daemon starting");
 
+    // Create kernel manager
+    let km = Arc::new(KernelManager::new());
+
+    // Try to start the kernel (non-fatal if no kernel is configured)
+    match km.start().await {
+        Ok(kpid) => info!(kernel_pid = kpid, "kernel started"),
+        Err(e) => info!("kernel not started: {e}"),
+    }
+
+    // Spawn kernel monitor
+    let monitor_handle = km.spawn_monitor();
+
     // Spawn IPC listener as background task
-    let ipc_handle = tokio::spawn(async {
-        if let Err(e) = super::ipc::listen().await {
+    let km_for_ipc = km.clone();
+    let ipc_handle = tokio::spawn(async move {
+        if let Err(e) = super::ipc::listen_with_kernel(km_for_ipc).await {
             error!("IPC listener failed: {e}");
         }
     });
@@ -33,6 +48,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tokio::signal::ctrl_c().await?;
     info!("received ctrl-c, shutting down");
 
+    // Stop kernel before exiting
+    if let Err(e) = km.stop().await {
+        info!("kernel stop: {e}");
+    }
+
+    monitor_handle.abort();
     ipc_handle.abort();
 
     // Clean up PID file

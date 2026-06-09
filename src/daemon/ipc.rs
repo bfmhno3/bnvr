@@ -1,9 +1,13 @@
+use std::sync::Arc;
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
 use tracing::{error, info};
+
+use super::core::KernelManager;
 
 const SOCKET_NAME: &str = "bnvr";
 
@@ -24,26 +28,37 @@ pub struct Response {
     pub error: Option<String>,
 }
 
-pub async fn listen() -> Result<(), Box<dyn std::error::Error>> {
-    listen_on(SOCKET_NAME).await
+struct IpcState {
+    kernel: Option<Arc<KernelManager>>,
 }
 
-pub async fn listen_on(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn listen() -> Result<(), Box<dyn std::error::Error>> {
+    listen_on(SOCKET_NAME, None).await
+}
+
+pub async fn listen_with_kernel(km: Arc<KernelManager>) -> Result<(), Box<dyn std::error::Error>> {
+    listen_on(SOCKET_NAME, Some(km)).await
+}
+
+pub async fn listen_on(name: &str, kernel: Option<Arc<KernelManager>>) -> Result<(), Box<dyn std::error::Error>> {
     let ns_name = name.to_ns_name::<GenericNamespaced>()?;
     let listener = ListenerOptions::new().name(ns_name).create_tokio()?;
     info!("IPC listening on {name}");
 
+    let state = Arc::new(Mutex::new(IpcState { kernel }));
+
     loop {
         let stream = listener.accept().await?;
+        let state = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream).await {
+            if let Err(e) = handle_connection(stream, state).await {
                 error!("IPC connection error: {e}");
             }
         });
     }
 }
 
-async fn handle_connection(stream: Stream) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_connection(stream: Stream, state: Arc<Mutex<IpcState>>) -> Result<(), Box<dyn std::error::Error>> {
     let (recv_half, send_half) = stream.split();
     let mut reader = BufReader::new(recv_half);
     let mut writer = send_half;
@@ -57,18 +72,21 @@ async fn handle_connection(stream: Stream) -> Result<(), Box<dyn std::error::Err
         }
 
         let resp = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => match handle_request(&req).await {
-                Ok(result) => Response {
-                    id: req.id,
-                    result: Some(result),
-                    error: None,
-                },
-                Err(e) => Response {
-                    id: req.id,
-                    result: None,
-                    error: Some(e.to_string()),
-                },
-            },
+            Ok(req) => {
+                let state = state.lock().await;
+                match handle_request(&req, &state).await {
+                    Ok(result) => Response {
+                        id: req.id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(e) => Response {
+                        id: req.id,
+                        result: None,
+                        error: Some(e.to_string()),
+                    },
+                }
+            }
             Err(e) => Response {
                 id: 0,
                 result: None,
@@ -86,6 +104,7 @@ async fn handle_connection(stream: Stream) -> Result<(), Box<dyn std::error::Err
 
 async fn handle_request(
     req: &Request,
+    state: &IpcState,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     match req.method.as_str() {
         "status" => {
@@ -96,6 +115,25 @@ async fn handle_request(
             info!("received shutdown request via IPC");
             trigger_shutdown();
             Ok(serde_json::json!(null))
+        }
+        "kernel.start" => {
+            let km = state.kernel.as_ref().ok_or("kernel manager not available")?;
+            let pid = km.start().await?;
+            Ok(serde_json::json!({ "pid": pid }))
+        }
+        "kernel.stop" => {
+            let km = state.kernel.as_ref().ok_or("kernel manager not available")?;
+            km.stop().await?;
+            Ok(serde_json::json!(null))
+        }
+        "kernel.status" => {
+            let km = state.kernel.as_ref().ok_or("kernel manager not available")?;
+            let s = km.status().await;
+            Ok(serde_json::json!({
+                "running": s.running,
+                "pid": s.pid,
+                "version": s.version,
+            }))
         }
         _ => Err(format!("unknown method: {}", req.method).into()),
     }

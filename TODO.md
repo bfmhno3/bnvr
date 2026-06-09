@@ -34,13 +34,13 @@
 
 ## Phase 4: Mihomo Kernel Management
 
-- [ ] `bnvr kernel list` -- scan local directory for downloaded kernels ~1d #feat
-- [ ] `bnvr kernel install` -- download Mihomo binary from GitHub Releases ~2d #feat
-  - [ ] Detect OS + arch (x86_64/aarch64, windows/linux)
-  - [ ] Download, extract, place in `~/.bnvr/kernels/`
-- [ ] `bnvr kernel use <version>` -- switch active kernel version ~1d #feat
-- [ ] `bnvr kernel status` -- report running kernel PID and version ~0.5d #feat
-- [ ] Daemon: spawn Mihomo as a child process, monitor its lifecycle ~2d #feat
+- [x] `bnvr kernel list` -- scan local directory for downloaded kernels ~1d #feat
+- [x] `bnvr kernel install` -- download Mihomo binary from GitHub Releases ~2d #feat
+  - [x] Detect OS + arch (x86_64/aarch64, windows/linux)
+  - [x] Download, extract, place in `~/.bnvr/kernels/`
+- [x] `bnvr kernel use <version>` -- switch active kernel version ~1d #feat
+- [x] `bnvr kernel status` -- report running kernel PID and version ~0.5d #feat
+- [x] Daemon: spawn Mihomo as a child process, monitor its lifecycle ~2d #feat
 
 ## Phase 5: Profile (Subscription Management)
 

@@ -25,12 +25,12 @@
 
 ## Phase 3: TUI Shell (Attach & Detach)
 
-- [ ] Add ratatui + crossterm dependencies ~0.5d #setup
-- [ ] Implement raw mode + alternate screen on `bnvr` (no args) ~1d #feat
-- [ ] Connect TUI client to daemon socket on startup ~1d #feat
-- [ ] Implement `q` key to cleanly detach (disable raw mode, leave alt screen) ~0.5d #feat
-- [ ] Skeleton layout: header, status bar, placeholder panels ~1d #feat
-  - [ ] Vim-style j/k navigation between panels
+- [x] Add ratatui + crossterm dependencies ~0.5d #setup
+- [x] Implement raw mode + alternate screen on `bnvr` (no args) ~1d #feat
+- [x] Connect TUI client to daemon socket on startup ~1d #feat
+- [x] Implement `q` key to cleanly detach (disable raw mode, leave alt screen) ~0.5d #feat
+- [x] Skeleton layout: header, status bar, placeholder panels ~1d #feat
+  - [x] Vim-style j/k navigation between panels
 
 ## Phase 4: Mihomo Kernel Management
 

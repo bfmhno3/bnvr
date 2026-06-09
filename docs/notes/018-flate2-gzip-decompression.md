@@ -20,11 +20,12 @@ Mihomo releases Linux binaries as `.gz` files (e.g. `mihomo-linux-amd64-v1.19.27
 use flate2::read::GzDecoder;
 use std::io::Read;
 
-fn extract_gz(data: &[u8], dest: &std::path::Path) -> std::io::Result<()> {
+fn extract_gz(data: &[u8], dest: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut decoder = GzDecoder::new(data);
     let mut buf = Vec::new();
     decoder.read_to_end(&mut buf)?;
-    std::fs::write(dest, buf)?;
+    let mut file = std::fs::File::create(dest)?;
+    std::io::Write::write_all(&mut file, &buf)?;
     Ok(())
 }
 ```

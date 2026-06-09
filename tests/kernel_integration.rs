@@ -1,77 +1,75 @@
 use bnvr::kernel::manage;
 use bnvr::paths;
 use std::fs;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
-// These tests share ~/.bnvr/kernels/.active and must run serially.
-// Run with: cargo test --test kernel_integration -- --test-threads=1
+// Serialize tests that mutate BNVR_HOME since env vars are process-global.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-fn setup() {
-    paths::ensure_dirs().unwrap();
+fn setup(test_name: &str) -> (PathBuf, std::sync::MutexGuard<'static, ()>) {
+    let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = std::env::temp_dir().join(format!("bnvr-test-{test_name}"));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(tmp.join("kernels")).unwrap();
+    // SAFETY: serialized by ENV_LOCK, no concurrent env access
+    unsafe { std::env::set_var("BNVR_HOME", &tmp) };
+    (tmp, guard)
 }
 
-fn cleanup_version(version: &str) {
-    let dir = paths::kernel_version_dir(version);
-    let _ = fs::remove_dir_all(dir);
-}
-
-fn cleanup_active() {
-    let _ = fs::remove_file(paths::active_kernel_file());
+fn cleanup(tmp: &PathBuf) {
+    let _ = fs::remove_dir_all(tmp);
 }
 
 #[test]
 fn test_list_installed_empty() {
-    setup();
-    // list_installed should not panic even if kernels dir is empty or has no versions
+    let (tmp, _guard) = setup("list-empty");
     let list = manage::list_installed();
-    // We can't assert it's empty because other tests may have left versions
-    // but it should not panic
-    let _ = list;
+    assert!(list.is_empty());
+    cleanup(&tmp);
 }
 
 #[test]
 fn test_set_active_and_read() {
-    setup();
+    let (tmp, _guard) = setup("set-active");
     let version = "v0.0.0-test-set-active";
 
-    // Create a fake version dir
     let dir = paths::kernel_version_dir(version);
     fs::create_dir_all(&dir).unwrap();
 
-    // Set active
     manage::set_active(version).unwrap();
 
-    // Read back
     let active = manage::read_active();
     assert_eq!(active.as_deref(), Some(version));
 
-    cleanup_version(version);
-    cleanup_active();
+    cleanup(&tmp);
 }
 
 #[test]
 fn test_set_active_rejects_missing_version() {
-    setup();
+    let (tmp, _guard) = setup("reject-missing");
     let result = manage::set_active("v99.99.99-nonexistent");
     assert!(result.is_err());
+    cleanup(&tmp);
 }
 
 #[test]
 fn test_kernel_status_no_active() {
-    setup();
-    cleanup_active();
+    let (tmp, _guard) = setup("status-no-active");
 
     let s = manage::kernel_status();
     assert!(s.active_version.is_none());
     assert!(!s.binary_exists);
     assert!(s.binary_path.is_none());
+
+    cleanup(&tmp);
 }
 
 #[test]
 fn test_kernel_status_with_active() {
-    setup();
+    let (tmp, _guard) = setup("status-with-active");
     let version = "v0.0.0-test-status";
 
-    // Create fake version dir with binary
     let dir = paths::kernel_version_dir(version);
     fs::create_dir_all(&dir).unwrap();
     let binary = paths::kernel_binary_path(version);
@@ -84,16 +82,14 @@ fn test_kernel_status_with_active() {
     assert!(s.binary_exists);
     assert!(s.binary_path.is_some());
 
-    cleanup_version(version);
-    cleanup_active();
+    cleanup(&tmp);
 }
 
 #[test]
 fn test_list_installed_shows_version() {
-    setup();
+    let (tmp, _guard) = setup("list-shows");
     let version = "v0.0.0-test-list";
 
-    // Create fake version dir with binary
     let dir = paths::kernel_version_dir(version);
     fs::create_dir_all(&dir).unwrap();
     let binary = paths::kernel_binary_path(version);
@@ -108,6 +104,5 @@ fn test_list_installed_shows_version() {
     assert!(k.active);
     assert!(k.binary_exists);
 
-    cleanup_version(version);
-    cleanup_active();
+    cleanup(&tmp);
 }

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
 pub fn bnvr_home() -> PathBuf {
+    if let Ok(custom) = std::env::var("BNVR_HOME") {
+        return PathBuf::from(custom);
+    }
     let home = dirs::home_dir().expect("Cannot determine home directory");
     home.join(".bnvr")
 }

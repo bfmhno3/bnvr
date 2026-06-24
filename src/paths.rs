@@ -41,6 +41,35 @@ pub fn kernel_binary_path(version: &str) -> PathBuf {
     }
 }
 
+pub fn overwrite_dir() -> PathBuf {
+    bnvr_home().join("overwrite")
+}
+
+pub fn active_plugin_file() -> PathBuf {
+    overwrite_dir().join(".active")
+}
+
+pub fn plugin_dir(name: &str) -> PathBuf {
+    overwrite_dir().join(name)
+}
+
+pub fn plugin_venv(name: &str) -> PathBuf {
+    plugin_dir(name).join(".venv")
+}
+
+pub fn plugin_python(name: &str) -> PathBuf {
+    let venv = plugin_venv(name);
+    if cfg!(target_os = "windows") {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
+}
+
+pub fn plugin_entry(name: &str) -> PathBuf {
+    plugin_dir(name).join("overwrite.py")
+}
+
 pub fn ensure_dirs() -> std::io::Result<()> {
     let home = bnvr_home();
     if !home.exists() {
@@ -53,6 +82,10 @@ pub fn ensure_dirs() -> std::io::Result<()> {
     let kernels = kernels_dir();
     if !kernels.exists() {
         std::fs::create_dir_all(&kernels)?;
+    }
+    let overwrite = overwrite_dir();
+    if !overwrite.exists() {
+        std::fs::create_dir_all(&overwrite)?;
     }
     Ok(())
 }
@@ -129,5 +162,50 @@ mod tests {
         } else {
             assert_eq!(path.file_name().unwrap(), "mihomo");
         }
+    }
+
+    #[test]
+    fn test_overwrite_dir_name() {
+        let path = overwrite_dir();
+        assert_eq!(path.file_name().unwrap(), "overwrite");
+        assert!(path.parent().unwrap().ends_with(".bnvr"));
+    }
+
+    #[test]
+    fn test_active_plugin_file_name() {
+        let path = active_plugin_file();
+        assert_eq!(path.file_name().unwrap(), ".active");
+        assert!(path.parent().unwrap().ends_with("overwrite"));
+    }
+
+    #[test]
+    fn test_plugin_dir() {
+        let path = plugin_dir("my-plugin");
+        assert_eq!(path.file_name().unwrap(), "my-plugin");
+        assert!(path.parent().unwrap().ends_with("overwrite"));
+    }
+
+    #[test]
+    fn test_plugin_venv() {
+        let path = plugin_venv("my-plugin");
+        assert_eq!(path.file_name().unwrap(), ".venv");
+        assert!(path.parent().unwrap().ends_with("my-plugin"));
+    }
+
+    #[test]
+    fn test_plugin_python_path() {
+        let path = plugin_python("my-plugin");
+        if cfg!(target_os = "windows") {
+            assert!(path.ends_with("Scripts\\python.exe"));
+        } else {
+            assert!(path.ends_with("bin/python"));
+        }
+    }
+
+    #[test]
+    fn test_plugin_entry_name() {
+        let path = plugin_entry("my-plugin");
+        assert_eq!(path.file_name().unwrap(), "overwrite.py");
+        assert!(path.parent().unwrap().ends_with("my-plugin"));
     }
 }

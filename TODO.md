@@ -55,14 +55,14 @@
 
 ## Phase 6: Python Bridge (Overwrite Plugins)
 
-- [ ] `bnvr overwrite init <name>` -- create plugin directory, call `uv venv` ~1d #feat
-- [ ] `bnvr overwrite list` / `bnvr overwrite use` -- manage plugins ~0.5d #feat
-- [ ] Rust-side stdin/stdout IPC with Python subprocess ~2d #feat
-  - [ ] Serialize config dict to JSON, pipe to Python stdin
-  - [ ] Read JSON from Python stdout, deserialize back
-  - [ ] `tokio::time::timeout` (3s) with forced kill on timeout
-- [ ] Implement the 4 hook types: `preprocess`, `postprocess`, `on_node_switch`, `on_network_dropped` ~2d #feat
-- [ ] `bnvr overwrite git <args...>` -- transparent git passthrough ~0.5d #feat
+- [x] `bnvr overwrite init <name>` -- create plugin directory, call `uv venv` ~1d #feat
+- [x] `bnvr overwrite list` / `bnvr overwrite use` -- manage plugins ~0.5d #feat
+- [x] Rust-side stdin/stdout IPC with Python subprocess ~2d #feat
+  - [x] Serialize config dict to JSON, pipe to Python stdin
+  - [x] Read JSON from Python stdout, deserialize back
+  - [x] `tokio::time::timeout` (3s) with forced kill on timeout
+- [x] Implement the 4 hook types: `preprocess`, `postprocess`, `on_node_switch`, `on_network_dropped` ~2d #feat
+- [x] `bnvr overwrite git <args...>` -- transparent git passthrough ~0.5d #feat
 
 ## Phase 7: Network Layer (TUN & Routing)
 

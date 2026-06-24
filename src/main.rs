@@ -2,6 +2,7 @@ mod cli;
 
 use bnvr::daemon;
 use bnvr::kernel;
+use bnvr::overwrite;
 use bnvr::profile;
 use clap::Parser;
 use cli::{
@@ -212,12 +213,58 @@ async fn main() {
                     }
                 }
             }
-            Commands::Overwrite { action } => match action {
-                OverwriteAction::Init { name } => println!("overwrite init {}", name),
-                OverwriteAction::List => println!("overwrite list"),
-                OverwriteAction::Use { name } => println!("overwrite use {}", name),
-                OverwriteAction::Git { args } => println!("overwrite git {:?}", args),
-            },
+            Commands::Overwrite { action } => {
+                if let Err(e) = bnvr::paths::ensure_dirs() {
+                    eprintln!("failed to create directories: {e}");
+                    std::process::exit(1);
+                }
+                match action {
+                    OverwriteAction::Init { name } => {
+                        match overwrite::crud::init(&name) {
+                            Ok(dir) => println!("plugin '{}' created at {}", name, dir.display()),
+                            Err(e) => {
+                                eprintln!("init failed: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    OverwriteAction::List => {
+                        match overwrite::crud::list() {
+                            Ok(plugins) => {
+                                if plugins.is_empty() {
+                                    println!("no plugins installed");
+                                } else {
+                                    for p in &plugins {
+                                        let marker = if p.active { " *" } else { "" };
+                                        let venv = if p.has_venv { "ok" } else { "no venv" };
+                                        println!("  {} [{}]{}", p.name, venv, marker);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("list failed: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    OverwriteAction::Use { name } => {
+                        if let Err(e) = overwrite::crud::set_active(&name) {
+                            eprintln!("failed: {e}");
+                            std::process::exit(1);
+                        }
+                        println!("active plugin set to {}", name);
+                    }
+                    OverwriteAction::Git { args } => {
+                        match overwrite::git::run_git_active(&args) {
+                            Ok(output) => print!("{}", output),
+                            Err(e) => {
+                                eprintln!("git failed: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                }
+            }
             Commands::Network { action } => match action {
                 NetworkAction::Tun { action } => match action {
                     TunAction::Setup => println!("network tun setup"),

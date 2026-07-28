@@ -1,6 +1,6 @@
 use std::fs;
-use std::io::{self, Read as _, Write as _};
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use serde::Deserialize;
@@ -12,14 +12,12 @@ const REPO: &str = "MetaCubeX/mihomo";
 fn api_client() -> Result<reqwest::Client, Box<dyn std::error::Error>> {
     let mut builder = reqwest::Client::builder().user_agent("bnvr");
     if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        builder = builder.default_headers({
-            let mut h = reqwest::header::HeaderMap::new();
-            h.insert(
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-            );
-            h
-        });
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {token}").parse()?,
+        );
+        builder = builder.default_headers(headers);
     }
     Ok(builder.build()?)
 }
@@ -51,8 +49,10 @@ pub fn asset_name(version: &str) -> String {
 }
 
 pub fn download_url(version: &str) -> String {
-    let asset = asset_name(version);
-    format!("https://github.com/{REPO}/releases/download/{version}/{asset}")
+    format!(
+        "https://github.com/{REPO}/releases/download/{version}/{}",
+        asset_name(version)
+    )
 }
 
 #[derive(Deserialize)]
@@ -62,28 +62,26 @@ struct Release {
 
 pub async fn latest_version() -> Result<String, Box<dyn std::error::Error>> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let resp = api_client()?
+    let release: Release = api_client()?
         .get(&url)
-        .header("Accept", "application/vnd.github+json")
         .send()
+        .await?
+        .error_for_status()?
+        .json()
         .await?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("GitHub API returned {status}: {body}").into());
-    }
-
-    let release: Release = resp.json().await?;
     Ok(release.tag_name)
 }
 
 pub async fn download_and_extract(version: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if version != "latest" {
+        paths::validate_component(version, "kernel version")?;
+    }
     let resolved = if version == "latest" {
         latest_version().await?
     } else {
         version.to_string()
     };
+    paths::validate_component(&resolved, "kernel version")?;
 
     let binary_path = paths::kernel_binary_path(&resolved);
     if binary_path.exists() {
@@ -91,13 +89,36 @@ pub async fn download_and_extract(version: &str) -> Result<PathBuf, Box<dyn std:
         return Ok(binary_path);
     }
 
-    let url = download_url(&resolved);
+    let kernels_dir = paths::kernels_dir();
+    fs::create_dir_all(&kernels_dir)?;
+    let staging_dir = kernels_dir.join(format!(".install-{}-{resolved}", std::process::id()));
+    remove_dir_if_exists(&staging_dir)?;
+    fs::create_dir_all(&staging_dir)?;
+
+    match download_and_stage(&resolved, &staging_dir).await {
+        Ok(()) => {
+            let install_result = finalize_staged_install(&resolved, &staging_dir);
+            if install_result.is_err() {
+                remove_dir_if_exists(&staging_dir)?;
+            }
+            install_result?;
+            Ok(binary_path)
+        }
+        Err(e) => {
+            remove_dir_if_exists(&staging_dir)?;
+            Err(e)
+        }
+    }
+}
+
+async fn download_and_stage(
+    resolved: &str,
+    staging_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url = download_url(resolved);
     println!("downloading {} ...", url);
 
-    let resp = api_client()?
-        .get(&url)
-        .send()
-        .await?;
+    let resp = api_client()?.get(&url).send().await?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -105,48 +126,67 @@ pub async fn download_and_extract(version: &str) -> Result<PathBuf, Box<dyn std:
     }
 
     let bytes = resp.bytes().await?;
-    let version_dir = paths::kernel_version_dir(&resolved);
-    fs::create_dir_all(&version_dir)?;
-
     let (os, _) = detect_platform();
     if os == "windows" {
-        extract_zip(&bytes, &version_dir)?;
+        extract_zip(&bytes, staging_dir)?;
     } else {
-        extract_gz(&bytes, &binary_path)?;
+        extract_gz(&bytes, &kernel_binary_in_dir(staging_dir))?;
     }
+    Ok(())
+}
 
-    if !binary_path.exists() {
+fn finalize_staged_install(
+    resolved: &str,
+    staging_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let staged_binary = kernel_binary_in_dir(staging_dir);
+    if !staged_binary.exists() {
         return Err("binary not found after extraction".into());
     }
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&staged_binary, fs::Permissions::from_mode(0o755))?;
     }
 
+    let version_dir = paths::kernel_version_dir(resolved);
+    fs::rename(staging_dir, &version_dir)?;
     println!("installed kernel {} to {}", resolved, version_dir.display());
-    Ok(binary_path)
-}
-
-fn extract_gz(data: &[u8], dest: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    let mut decoder = GzDecoder::new(data);
-    let mut buf = Vec::new();
-    decoder.read_to_end(&mut buf)?;
-    let mut file = fs::File::create(dest)?;
-    file.write_all(&buf)?;
     Ok(())
 }
 
-fn extract_zip(data: &[u8], dest_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn kernel_binary_in_dir(dir: &Path) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        dir.join("mihomo.exe")
+    } else {
+        dir.join("mihomo")
+    }
+}
+
+fn remove_dir_if_exists(dir: &Path) -> std::io::Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)?;
+    }
+    Ok(())
+}
+
+fn extract_gz(data: &[u8], dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut decoder = GzDecoder::new(data);
+    let mut file = fs::File::create(dest)?;
+    io::copy(&mut decoder, &mut file)?;
+    Ok(())
+}
+
+fn extract_zip(data: &[u8], dest_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let reader = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(reader)?;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let name = file.name().to_string();
-        // Find the binary: look for mihomo*.exe or just mihomo
-        if name.ends_with(".exe") || (!name.contains('/') && !name.contains('.') && name.contains("mihomo"))
+        if name.ends_with(".exe")
+            || (!name.contains('/') && !name.contains('.') && name.contains("mihomo"))
         {
             let dest = if name.ends_with(".exe") {
                 dest_dir.join("mihomo.exe")

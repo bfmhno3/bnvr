@@ -25,6 +25,8 @@ pub fn read_active() -> Option<String> {
 }
 
 pub fn set_active(version: &str) -> std::io::Result<()> {
+    paths::validate_component(version, "kernel version")
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let dir = paths::kernel_version_dir(version);
     if !dir.exists() {
         return Err(std::io::Error::new(
@@ -71,10 +73,10 @@ pub fn running_pid() -> Option<u32> {
     #[cfg(windows)]
     {
         // Use Windows toolhelp32 to enumerate processes
-        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
-        };
         use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next,
+        };
         const TH32CS_SNAPPROCESS: u32 = 0x00000002;
 
         unsafe {
@@ -89,7 +91,7 @@ pub fn running_pid() -> Option<u32> {
             if Process32First(snapshot, &mut entry) != 0 {
                 loop {
                     let name = std::ffi::CStr::from_ptr(
-                        entry.szExeFile.as_ptr() as *const std::ffi::c_char,
+                        entry.szExeFile.as_ptr() as *const std::ffi::c_char
                     );
                     if name.to_string_lossy().contains("mihomo") {
                         let _ = CloseHandle(snapshot);
@@ -177,5 +179,24 @@ mod tests {
         let status = kernel_status();
         // pid field should be populated (either Some or None)
         let _ = status.pid;
+    }
+
+    #[test]
+    fn test_set_active_rejects_invalid_version_without_writing_active() {
+        let temp = std::env::temp_dir().join("bnvr_test_kernel_invalid_active");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join("kernels")).unwrap();
+        let old_home = std::env::var("BNVR_HOME").ok();
+        unsafe { std::env::set_var("BNVR_HOME", &temp) };
+
+        let result = set_active("../escape");
+        assert!(result.is_err());
+        assert!(!paths::active_kernel_file().exists());
+
+        match old_home {
+            Some(value) => unsafe { std::env::set_var("BNVR_HOME", value) },
+            None => unsafe { std::env::remove_var("BNVR_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

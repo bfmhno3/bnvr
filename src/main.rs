@@ -34,7 +34,7 @@ async fn main() {
                     }
                 }
                 DaemonAction::Stop => {
-                    if let Err(e) = daemon::stop::run() {
+                    if let Err(e) = daemon::stop::run().await {
                         eprintln!("daemon stop failed: {e}");
                         std::process::exit(1);
                     }

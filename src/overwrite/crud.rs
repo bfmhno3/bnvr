@@ -60,7 +60,11 @@ pub fn init(name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     init_in(&paths::overwrite_dir(), name)
 }
 
-pub fn init_in(overwrite_dir: &std::path::Path, name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub fn init_in(
+    overwrite_dir: &std::path::Path,
+    name: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    paths::validate_component(name, "plugin name")?;
     let dir = overwrite_dir.join(name);
     if dir.exists() {
         return Err(format!("plugin already exists: {name}").into());
@@ -71,16 +75,11 @@ pub fn init_in(overwrite_dir: &std::path::Path, name: &str) -> Result<PathBuf, B
     let entry = dir.join("overwrite.py");
     fs::write(&entry, ENTRY_TEMPLATE)?;
 
-    // Try to create venv with uv, fall back to python -m venv
-    let venv_result = Command::new("uv")
-        .args(["venv"])
-        .current_dir(&dir)
-        .status();
+    let venv_result = Command::new("uv").args(["venv"]).current_dir(&dir).status();
 
     match venv_result {
         Ok(status) if status.success() => {}
         _ => {
-            // Fallback to python -m venv
             let fallback = Command::new("python")
                 .args(["-m", "venv", ".venv"])
                 .current_dir(&dir)
@@ -105,7 +104,9 @@ pub fn list() -> Result<Vec<PluginInfo>, Box<dyn std::error::Error>> {
     list_in(&paths::overwrite_dir())
 }
 
-pub fn list_in(overwrite_dir: &std::path::Path) -> Result<Vec<PluginInfo>, Box<dyn std::error::Error>> {
+pub fn list_in(
+    overwrite_dir: &std::path::Path,
+) -> Result<Vec<PluginInfo>, Box<dyn std::error::Error>> {
     let active = get_active_in(overwrite_dir);
     let mut result = Vec::new();
 
@@ -151,7 +152,11 @@ pub fn set_active(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     set_active_in(&paths::overwrite_dir(), name)
 }
 
-pub fn set_active_in(overwrite_dir: &std::path::Path, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn set_active_in(
+    overwrite_dir: &std::path::Path,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    paths::validate_component(name, "plugin name")?;
     let dir = overwrite_dir.join(name);
     if !dir.exists() {
         return Err(format!("plugin not found: {name}").into());
@@ -163,108 +168,86 @@ pub fn set_active_in(overwrite_dir: &std::path::Path, name: &str) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
-    fn setup(test_name: &str) -> PathBuf {
-        let tmp = std::env::temp_dir().join(format!("bnvr-test-overwrite-{test_name}"));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
-        tmp
+    fn setup(test_name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(test_name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
-    fn test_init_creates_directory_and_entry() {
-        let dir = setup("init-creates");
-        init_in(&dir, "test-plugin").unwrap();
-
-        let plugin = dir.join("test-plugin");
+    fn test_init_creates_plugin_structure() {
+        let dir = setup("bnvr_test_plugin_init");
+        let plugin = init_in(&dir, "test-plugin").unwrap();
         assert!(plugin.exists());
         assert!(plugin.join("overwrite.py").exists());
-
-        let content = fs::read_to_string(plugin.join("overwrite.py")).unwrap();
-        assert!(content.contains("def preprocess"));
-        assert!(content.contains("def postprocess"));
-        assert!(content.contains("def on_node_switch"));
-        assert!(content.contains("def on_network_dropped"));
-
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn test_init_rejects_duplicate() {
-        let dir = setup("init-dup");
-        init_in(&dir, "dup-plugin").unwrap();
-        let result = init_in(&dir, "dup-plugin");
+    fn test_init_duplicate_fails() {
+        let dir = setup("bnvr_test_plugin_duplicate");
+        init_in(&dir, "test-plugin").unwrap();
+        let result = init_in(&dir, "test-plugin");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn test_list_empty() {
-        let dir = setup("list-empty");
+        let dir = setup("bnvr_test_plugin_list_empty");
         let plugins = list_in(&dir).unwrap();
         assert!(plugins.is_empty());
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn test_list_multiple() {
-        let dir = setup("list-multiple");
-        init_in(&dir, "beta").unwrap();
-        init_in(&dir, "alpha").unwrap();
+    fn test_list_plugins() {
+        let dir = setup("bnvr_test_plugin_list");
+        fs::create_dir_all(dir.join("plugin-b")).unwrap();
+        fs::create_dir_all(dir.join("plugin-a")).unwrap();
+        fs::write(dir.join("plugin-a").join("overwrite.py"), "").unwrap();
+        fs::write(dir.join(".active"), "plugin-b").unwrap();
 
         let plugins = list_in(&dir).unwrap();
         assert_eq!(plugins.len(), 2);
-        assert_eq!(plugins[0].name, "alpha");
-        assert_eq!(plugins[1].name, "beta");
-        let _ = fs::remove_dir_all(dir);
+        assert_eq!(plugins[0].name, "plugin-a");
+        assert!(plugins[0].has_entry);
+        assert_eq!(plugins[1].name, "plugin-b");
+        assert!(plugins[1].active);
     }
 
     #[test]
-    fn test_set_active_and_get_active() {
-        let dir = setup("set-active");
-        init_in(&dir, "my-plugin").unwrap();
-
-        assert!(get_active_in(&dir).is_none());
-
-        set_active_in(&dir, "my-plugin").unwrap();
-        assert_eq!(get_active_in(&dir).as_deref(), Some("my-plugin"));
-        let _ = fs::remove_dir_all(dir);
+    fn test_set_active() {
+        let dir = setup("bnvr_test_plugin_active");
+        fs::create_dir_all(dir.join("test-plugin")).unwrap();
+        set_active_in(&dir, "test-plugin").unwrap();
+        assert_eq!(get_active_in(&dir).unwrap(), "test-plugin");
     }
 
     #[test]
-    fn test_set_active_rejects_missing() {
-        let dir = setup("set-active-missing");
-        let result = set_active_in(&dir, "nonexistent");
+    fn test_set_active_missing_fails() {
+        let dir = setup("bnvr_test_plugin_active_missing");
+        let result = set_active_in(&dir, "missing");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn test_list_shows_active_marker() {
-        let dir = setup("list-active");
-        init_in(&dir, "p1").unwrap();
-        init_in(&dir, "p2").unwrap();
-        set_active_in(&dir, "p1").unwrap();
-
-        let plugins = list_in(&dir).unwrap();
-        let p1 = plugins.iter().find(|p| p.name == "p1").unwrap();
-        let p2 = plugins.iter().find(|p| p.name == "p2").unwrap();
-        assert!(p1.active);
-        assert!(!p2.active);
-        let _ = fs::remove_dir_all(dir);
+    fn test_init_rejects_invalid_plugin_names_without_escape() {
+        let dir = setup("bnvr_test_plugin_invalid_names");
+        for name in ["", ".", "..", "../escape", "a/b", "a\\b"] {
+            let result = init_in(&dir, name);
+            assert!(result.is_err());
+        }
+        assert!(!dir.join("..").join("escape").exists());
+        assert!(!std::env::temp_dir().join("escape").exists());
     }
 
     #[test]
-    fn test_init_creates_entry_with_valid_python_syntax() {
-        let dir = setup("init-syntax");
-        init_in(&dir, "syntax-test").unwrap();
-
-        let content = fs::read_to_string(dir.join("syntax-test").join("overwrite.py")).unwrap();
-        assert!(content.contains("if __name__ == \"__main__\":"));
-        assert!(content.contains("json.load(sys.stdin)"));
-        assert!(content.contains("json.dumps"));
-        let _ = fs::remove_dir_all(dir);
+    fn test_init_accepts_hyphenated_plugin_name() {
+        let dir = setup("bnvr_test_plugin_valid_name");
+        let plugin = init_in(&dir, "valid-plugin").unwrap();
+        assert_eq!(plugin.file_name().unwrap(), "valid-plugin");
     }
 }

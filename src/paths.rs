@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 pub fn bnvr_home() -> PathBuf {
     if let Ok(custom) = std::env::var("BNVR_HOME") {
@@ -6,6 +6,22 @@ pub fn bnvr_home() -> PathBuf {
     }
     let home = dirs::home_dir().expect("Cannot determine home directory");
     home.join(".bnvr")
+}
+
+pub fn validate_component(value: &str, kind: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = Path::new(value);
+    let mut components = path.components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(component)), None)
+            if component.to_string_lossy() == value
+                && !value.is_empty()
+                && !value.contains('/')
+                && !value.contains('\\') =>
+        {
+            Ok(())
+        }
+        _ => Err(format!("invalid {kind}: {value}").into()),
+    }
 }
 
 pub fn pid_file() -> PathBuf {
@@ -207,5 +223,18 @@ mod tests {
         let path = plugin_entry("my-plugin");
         assert_eq!(path.file_name().unwrap(), "overwrite.py");
         assert!(path.parent().unwrap().ends_with("my-plugin"));
+    }
+
+    #[test]
+    fn test_validate_component_rejects_invalid_names() {
+        for value in ["", ".", "..", "../escape", "a/b", "a\\b"] {
+            let err = validate_component(value, "component").unwrap_err();
+            assert_eq!(err.to_string(), format!("invalid component: {value}"));
+        }
+    }
+
+    #[test]
+    fn test_validate_component_accepts_hyphenated_name() {
+        validate_component("v1.2.3-alpha", "component").unwrap();
     }
 }

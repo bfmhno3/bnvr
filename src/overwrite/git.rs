@@ -12,15 +12,13 @@ pub fn run_git_in(
     plugin_name: &str,
     args: &[String],
 ) -> Result<String, Box<dyn std::error::Error>> {
+    paths::validate_component(plugin_name, "plugin name")?;
     let dir = overwrite_dir.join(plugin_name);
     if !dir.exists() {
         return Err(format!("plugin not found: {plugin_name}").into());
     }
 
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(&dir)
-        .output()?;
+    let output = Command::new("git").args(args).current_dir(&dir).output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

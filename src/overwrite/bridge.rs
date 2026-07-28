@@ -56,6 +56,7 @@ pub async fn run_hook_in(
     config: serde_json::Value,
     extra: serde_json::Value,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    paths::validate_component(plugin_name, "plugin name")?;
     let plugin_dir = overwrite_dir.join(plugin_name);
     let venv = plugin_dir.join(".venv");
     let python = if cfg!(target_os = "windows") {
@@ -105,7 +106,11 @@ pub async fn run_hook_in(
         Ok(result) => result?,
         Err(_) => {
             // Timeout: kill the child process by PID
-            error!(plugin = plugin_name, hook = hook, "hook timed out, killing process");
+            error!(
+                plugin = plugin_name,
+                hook = hook,
+                "hook timed out, killing process"
+            );
             if let Some(pid) = pid {
                 kill_pid(pid);
             }

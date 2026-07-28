@@ -1,13 +1,18 @@
-use rusqlite::{Connection, params};
+use std::error::Error;
+use std::path::PathBuf;
+
 use tracing::info;
 
-use super::crud;
+use super::crud::{self, ProfileKind};
+use crate::paths;
+
+const DEFAULT_USER_AGENT: &str = concat!("clash-verge/v", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug)]
 pub struct SyncResult {
     pub name: String,
     pub bytes: usize,
-    pub subscription_id: i64,
+    pub path: PathBuf,
 }
 
 pub struct SyncFailure {
@@ -20,8 +25,10 @@ pub struct SyncAllResult {
     pub failed: Vec<SyncFailure>,
 }
 
-pub async fn fetch_yaml(url: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::builder().user_agent("bnvr").build()?;
+pub async fn fetch_yaml(url: &str, user_agent: Option<&str>) -> Result<String, Box<dyn Error>> {
+    let client = reqwest::Client::builder()
+        .user_agent(user_agent.unwrap_or(DEFAULT_USER_AGENT))
+        .build()?;
 
     let resp = client.get(url).send().await?;
     let status = resp.status();
@@ -34,60 +41,59 @@ pub async fn fetch_yaml(url: &str) -> Result<String, Box<dyn std::error::Error>>
         return Err("empty response from subscription URL".into());
     }
 
-    Ok(text)
+    Ok(text.trim_start_matches('\u{feff}').to_string())
 }
 
-pub async fn sync_one(
-    conn: &Connection,
-    name: &str,
-) -> Result<SyncResult, Box<dyn std::error::Error>> {
-    let profile = crud::get(conn, name)?;
-    info!(name = %profile.name, url = %profile.url, "syncing profile");
-
-    let content = fetch_yaml(&profile.url).await?;
-    let bytes = content.len();
-
-    if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-        tracing::warn!(name = %name, error = %e, "content is not valid YAML, storing raw text");
+pub fn validate_config(content: &str) -> Result<(), Box<dyn Error>> {
+    let value: serde_yaml::Value = serde_yaml::from_str(content)?;
+    let mapping = value
+        .as_mapping()
+        .ok_or("invalid config: expected a YAML mapping")?;
+    if !mapping.contains_key("proxies") && !mapping.contains_key("proxy-providers") {
+        return Err("invalid config: missing `proxies` and `proxy-providers`".into());
     }
+    Ok(())
+}
 
-    let sub_id = store_sync(conn, profile.id, &content)?;
+pub async fn sync_one(name: &str) -> Result<SyncResult, Box<dyn Error>> {
+    let profile = crud::get(name)?;
+    let url = profile
+        .meta
+        .url
+        .as_deref()
+        .ok_or_else(|| format!("profile {name} has no url"))?;
+    info!(name = %profile.name, url = %url, "syncing profile");
 
-    info!(name = %name, bytes, subscription_id = sub_id, "sync complete");
+    let content = fetch_yaml(url, profile.meta.user_agent.as_deref()).await?;
+    validate_config(&content)?;
+    let bytes = content.len();
+    let path = paths::profile_raw_file(name);
+    crud::write_atomic(&path, &content)?;
+
+    let mut meta = profile.meta;
+    meta.updated_at = Some(crud::now_secs());
+    crud::write_meta(name, &meta)?;
+    crud::refresh_active_config(name)?;
+
+    info!(name = %name, bytes, "sync complete");
 
     Ok(SyncResult {
         name: name.to_string(),
         bytes,
-        subscription_id: sub_id,
+        path,
     })
 }
 
-fn store_sync(
-    conn: &Connection,
-    profile_id: i64,
-    content: &str,
-) -> Result<i64, Box<dyn std::error::Error>> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "INSERT INTO subscriptions (profile_id, content) VALUES (?1, ?2)",
-        params![profile_id, content],
-    )?;
-    let sub_id = tx.last_insert_rowid();
-    tx.execute(
-        "UPDATE profiles SET raw_config = ?1, updated_at = datetime('now') WHERE id = ?2",
-        params![content, profile_id],
-    )?;
-    tx.commit()?;
-    Ok(sub_id)
-}
-
-pub async fn sync_all(conn: &Connection) -> Result<SyncAllResult, Box<dyn std::error::Error>> {
-    let profiles: Vec<crud::ProfileInfo> = crud::list(conn)?;
+pub async fn sync_all() -> Result<SyncAllResult, Box<dyn Error>> {
+    let profiles = crud::list()?;
     let mut synced = Vec::new();
     let mut failed = Vec::new();
 
     for profile in profiles {
-        match sync_one(conn, &profile.name).await {
+        if profile.meta.kind == ProfileKind::Merge {
+            continue;
+        }
+        match sync_one(&profile.name).await {
             Ok(r) => synced.push(r),
             Err(e) => {
                 tracing::error!(name = %profile.name, error = %e, "sync failed");
@@ -105,89 +111,73 @@ pub async fn sync_all(conn: &Connection) -> Result<SyncAllResult, Box<dyn std::e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::db;
-    use rusqlite::Connection;
+    use crate::test_env;
     use std::io::{Read as _, Write as _};
     use std::net::TcpListener;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
-    fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        db::init_schema(&conn).unwrap();
-        conn
+    fn setup(test_name: &str) -> (PathBuf, std::sync::MutexGuard<'static, ()>) {
+        test_env::setup_profile(&format!("sync-{test_name}"))
+    }
+
+    fn cleanup(tmp: &PathBuf) {
+        test_env::cleanup(tmp);
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_sync_one_not_found() {
-        let conn = test_conn();
-        let result = sync_one(&conn, "nonexistent").await;
+        let (tmp, _guard) = setup("one-not-found");
+        let result = sync_one("nonexistent").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+        cleanup(&tmp);
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_sync_all_empty() {
-        let conn = test_conn();
-        let results = sync_all(&conn).await.unwrap();
+        let (tmp, _guard) = setup("all-empty");
+        let results = sync_all().await.unwrap();
         assert!(results.synced.is_empty());
         assert!(results.failed.is_empty());
+        cleanup(&tmp);
     }
-
-    #[test]
-    fn test_store_sync_rolls_back_when_profile_update_fails() {
-        let conn = test_conn();
-        crud::add(&conn, "test", "http://example.test/sub.yaml").unwrap();
-        let profile = crud::get(&conn, "test").unwrap();
-        conn.execute(
-            "CREATE TRIGGER abort_profile_update BEFORE UPDATE ON profiles BEGIN SELECT RAISE(ABORT, 'abort update'); END",
-            [],
-        )
-        .unwrap();
-
-        let result = store_sync(&conn, profile.id, "proxies: []");
-        assert!(result.is_err());
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
-            .unwrap();
-        let raw_config: Option<String> = conn
-            .query_row(
-                "SELECT raw_config FROM profiles WHERE id = ?1",
-                [profile.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 0);
-        assert!(raw_config.is_none());
-    }
-
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_sync_all_returns_successes_and_failures() {
-        let conn = test_conn();
-        let good_url =
+        let (tmp, _guard) = setup("success-failure");
+        let (good_url, _) =
             start_test_http_server("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nproxies: []");
-        let bad_url = start_test_http_server(
+        let (bad_url, _) = start_test_http_server(
             "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n",
         );
-        crud::add(&conn, "bad", &bad_url).unwrap();
-        crud::add(&conn, "good", &good_url).unwrap();
+        crud::add("bad", &bad_url, None).unwrap();
+        crud::add("good", &good_url, None).unwrap();
 
-        let result = sync_all(&conn).await.unwrap();
+        let result = sync_all().await.unwrap();
         assert_eq!(result.synced.len(), 1);
         assert_eq!(result.synced[0].name, "good");
         assert_eq!(result.failed.len(), 1);
         assert_eq!(result.failed[0].name, "bad");
         assert!(result.failed[0].error.contains("HTTP 500"));
+        cleanup(&tmp);
     }
 
-    fn start_test_http_server(response: &'static str) -> String {
+    fn start_test_http_server(response: &'static str) -> (String, Arc<Mutex<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let request = Arc::new(Mutex::new(String::new()));
+        let captured = Arc::clone(&request);
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buffer = [0; 1024];
-            let _ = stream.read(&mut buffer);
+            let n = stream.read(&mut buffer).unwrap_or(0);
+            *captured.lock().unwrap() = String::from_utf8_lossy(&buffer[..n]).to_string();
             stream.write_all(response.as_bytes()).unwrap();
         });
-        format!("http://{addr}/sub.yaml")
+        (format!("http://{addr}/sub.yaml"), request)
     }
 }

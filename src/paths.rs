@@ -85,6 +85,33 @@ pub fn plugin_python(name: &str) -> PathBuf {
 pub fn plugin_entry(name: &str) -> PathBuf {
     plugin_dir(name).join("overwrite.py")
 }
+pub fn profiles_dir() -> PathBuf {
+    bnvr_home().join("profile")
+}
+
+pub fn active_profile_file() -> PathBuf {
+    profiles_dir().join(".active")
+}
+
+pub fn profile_dir(name: &str) -> PathBuf {
+    profiles_dir().join(name)
+}
+
+pub fn profile_meta_file(name: &str) -> PathBuf {
+    profile_dir(name).join("meta.json")
+}
+
+pub fn profile_raw_file(name: &str) -> PathBuf {
+    profile_dir(name).join("raw.yml")
+}
+
+pub fn profile_processed_file(name: &str) -> PathBuf {
+    profile_dir(name).join("processed.yml")
+}
+
+pub fn mihomo_config_file() -> PathBuf {
+    bnvr_home().join("config.yaml")
+}
 
 pub fn ensure_dirs() -> std::io::Result<()> {
     let home = bnvr_home();
@@ -102,6 +129,10 @@ pub fn ensure_dirs() -> std::io::Result<()> {
     let overwrite = overwrite_dir();
     if !overwrite.exists() {
         std::fs::create_dir_all(&overwrite)?;
+    }
+    let profiles = profiles_dir();
+    if !profiles.exists() {
+        std::fs::create_dir_all(&profiles)?;
     }
     Ok(())
 }
@@ -223,6 +254,41 @@ mod tests {
         let path = plugin_entry("my-plugin");
         assert_eq!(path.file_name().unwrap(), "overwrite.py");
         assert!(path.parent().unwrap().ends_with("my-plugin"));
+    }
+
+    #[test]
+    fn test_profiles_dir_name() {
+        let path = profiles_dir();
+        assert_eq!(path.file_name().unwrap(), "profile");
+        assert!(path.parent().unwrap().ends_with(".bnvr"));
+    }
+
+    #[test]
+    fn test_active_profile_file_name() {
+        let path = active_profile_file();
+        assert_eq!(path.file_name().unwrap(), ".active");
+        assert!(path.parent().unwrap().ends_with("profile"));
+    }
+
+    #[test]
+    fn test_profile_dir() {
+        let path = profile_dir("my-profile");
+        assert_eq!(path.file_name().unwrap(), "my-profile");
+        assert!(path.parent().unwrap().ends_with("profile"));
+    }
+
+    #[test]
+    fn test_profile_raw_file() {
+        let path = profile_raw_file("my-profile");
+        assert_eq!(path.file_name().unwrap(), "raw.yml");
+        assert!(path.parent().unwrap().ends_with("my-profile"));
+    }
+
+    #[test]
+    fn test_mihomo_config_file() {
+        let path = mihomo_config_file();
+        assert_eq!(path.file_name().unwrap(), "config.yaml");
+        assert!(path.parent().unwrap().ends_with(".bnvr"));
     }
 
     #[test]

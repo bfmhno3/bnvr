@@ -236,18 +236,6 @@ fn test_db_full_workflow() {
     db::init_schema(&conn).unwrap();
 
     conn.execute(
-        "INSERT INTO profiles (name, url) VALUES ('work', 'http://sub.example.com')",
-        [],
-    )
-    .unwrap();
-
-    conn.execute(
-        "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'proxies: []')",
-        [],
-    )
-    .unwrap();
-
-    conn.execute(
         "INSERT INTO audit_log (action, detail) VALUES ('profile_sync', 'work synced')",
         [],
     )
@@ -264,20 +252,6 @@ fn test_db_full_workflow() {
         [],
     )
     .unwrap();
-
-    let profile_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(profile_count, 1);
-
-    let sub_content: String = conn
-        .query_row(
-            "SELECT s.content FROM subscriptions s JOIN profiles p ON s.profile_id = p.id WHERE p.name = 'work'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(sub_content, "proxies: []");
 
     let audit_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))
@@ -300,30 +274,6 @@ fn test_db_full_workflow() {
         .unwrap();
     assert_eq!(up, 1024);
     assert_eq!(down, 2048);
-}
-
-#[test]
-fn test_db_delete_profile_cascades() {
-    let conn = Connection::open_in_memory().unwrap();
-    db::init_schema(&conn).unwrap();
-
-    conn.execute(
-        "INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')",
-        [],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'data')",
-        [],
-    )
-    .unwrap();
-
-    conn.execute("DELETE FROM profiles WHERE id=1", []).unwrap();
-
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(count, 0);
 }
 
 // ── Paths Integration Tests ──────────────────────────────────────────

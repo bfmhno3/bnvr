@@ -1,5 +1,3 @@
-use rusqlite::{Connection, params};
-
 use super::crud;
 
 #[derive(Debug, PartialEq)]
@@ -15,24 +13,11 @@ pub struct DiffLine {
     pub content: String,
 }
 
-pub fn diff(conn: &Connection, name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let profile = crud::get(conn, name)?;
+pub fn diff(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let name = crud::resolve(name)?;
+    let raw = crud::read_raw(&name)?;
 
-    let raw = profile
-        .raw_config
-        .as_deref()
-        .ok_or("no raw config stored (run `bnvr profile sync` first)")?;
-
-    // Get the latest subscription content (processed by overwrite)
-    let processed: Option<String> = conn
-        .query_row(
-            "SELECT content FROM subscriptions WHERE profile_id = ?1 ORDER BY fetched_at DESC LIMIT 1",
-            params![profile.id],
-            |row| row.get(0),
-        )
-        .ok();
-
-    let processed = match processed {
+    let processed = match crud::read_processed(&name) {
         Some(p) => p,
         None => {
             println!("no processed config available yet (run overwrite first)");
@@ -40,7 +25,7 @@ pub fn diff(conn: &Connection, name: &str) -> Result<(), Box<dyn std::error::Err
         }
     };
 
-    let diff_lines = line_diff(raw, &processed);
+    let diff_lines = line_diff(&raw, &processed);
     render_diff(&diff_lines);
     Ok(())
 }

@@ -1,45 +1,30 @@
-use rusqlite::Connection;
-
 use super::crud;
 
-pub fn view(
-    conn: &Connection,
-    name: &str,
-    json_path: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let profile = crud::get(conn, name)?;
+pub fn view(name: Option<&str>, yaml_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let name = crud::resolve(name)?;
+    let raw = crud::effective_config(&name)?;
+    let yaml_val: serde_yaml::Value = serde_yaml::from_str(&raw)?;
 
-    let raw = profile
-        .raw_config
-        .as_deref()
-        .ok_or("no config stored for this profile (run `bnvr profile sync` first)")?;
-
-    let yaml_val: serde_yaml::Value = serde_yaml::from_str(raw)?;
-    let json_val: serde_json::Value = serde_json::to_value(yaml_val)?;
-
-    let target = match json_path {
+    let target = match yaml_path {
         Some(path) => {
-            navigate_path(&json_val, path).ok_or_else(|| format!("path not found: {path}"))?
+            navigate_path(&yaml_val, path).ok_or_else(|| format!("path not found: {path}"))?
         }
-        None => &json_val,
+        None => &yaml_val,
     };
 
-    println!("{}", serde_json::to_string_pretty(target)?);
+    print!("{}", serde_yaml::to_string(target)?);
     Ok(())
 }
 
 pub fn navigate_path<'a>(
-    value: &'a serde_json::Value,
+    value: &'a serde_yaml::Value,
     path: &str,
-) -> Option<&'a serde_json::Value> {
+) -> Option<&'a serde_yaml::Value> {
     let mut current = value;
     for segment in path.split('.') {
         current = match current {
-            serde_json::Value::Object(map) => map.get(segment)?,
-            serde_json::Value::Array(arr) => {
-                let index: usize = segment.parse().ok()?;
-                arr.get(index)?
-            }
+            serde_yaml::Value::Mapping(map) => map.get(segment)?,
+            serde_yaml::Value::Sequence(seq) => seq.get(segment.parse::<usize>().ok()?)?,
             _ => return None,
         };
     }
@@ -50,62 +35,59 @@ pub fn navigate_path<'a>(
 mod tests {
     use super::*;
 
-    fn sample_json() -> serde_json::Value {
-        serde_json::json!({
-            "proxies": [
-                {"name": "node1", "type": "ss"},
-                {"name": "node2", "type": "vmess"}
-            ],
-            "rules": ["DOMAIN-SUFFIX,google.com,Proxy"],
-            "port": 7890
-        })
+    fn sample_yaml() -> serde_yaml::Value {
+        serde_yaml::from_str(
+            "proxies:\n  - name: node1\n    type: ss\n  - name: node2\n    type: vmess\nrules:\n  - DOMAIN-SUFFIX,google.com,Proxy\nport: 7890\n",
+        )
+        .unwrap()
     }
 
     #[test]
     fn test_navigate_object_key() {
-        let val = sample_json();
+        let val = sample_yaml();
         let result = navigate_path(&val, "port").unwrap();
-        assert_eq!(result, &serde_json::json!(7890));
+        assert_eq!(result, &serde_yaml::Value::Number(7890.into()));
     }
 
     #[test]
     fn test_navigate_array_index() {
-        let val = sample_json();
+        let val = sample_yaml();
         let result = navigate_path(&val, "proxies.0").unwrap();
-        assert_eq!(result["name"], "node1");
+        assert_eq!(
+            navigate_path(result, "name"),
+            Some(&serde_yaml::Value::String("node1".into()))
+        );
     }
 
     #[test]
     fn test_navigate_nested() {
-        let val = sample_json();
+        let val = sample_yaml();
         let result = navigate_path(&val, "proxies.1.type").unwrap();
-        assert_eq!(result, &serde_json::json!("vmess"));
+        assert_eq!(result, &serde_yaml::Value::String("vmess".into()));
     }
 
     #[test]
     fn test_navigate_empty_path() {
-        let val = sample_json();
-        // Empty path returns root
+        let val = sample_yaml();
         let result = navigate_path(&val, "");
-        // Empty split yields one empty segment, which won't match
         assert!(result.is_none());
     }
 
     #[test]
     fn test_navigate_invalid_key() {
-        let val = sample_json();
+        let val = sample_yaml();
         assert!(navigate_path(&val, "nonexistent").is_none());
     }
 
     #[test]
     fn test_navigate_array_out_of_bounds() {
-        let val = sample_json();
+        let val = sample_yaml();
         assert!(navigate_path(&val, "proxies.99").is_none());
     }
 
     #[test]
     fn test_navigate_array_non_numeric() {
-        let val = sample_json();
+        let val = sample_yaml();
         assert!(navigate_path(&val, "proxies.abc").is_none());
     }
 }

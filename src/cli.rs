@@ -97,31 +97,37 @@ pub enum ProfileAction {
         url: String,
         /// Profile name
         name: String,
+        /// Override the User-Agent sent when syncing this profile
+        #[arg(long)]
+        user_agent: Option<String>,
     },
     /// Remove a subscription source
-    Del {
-        /// Profile name to remove
-        name: String,
-    },
-    /// List stored subscriptions
+    Del { name: String },
+    /// List stored profiles
     List,
-    /// Fetch and process a subscription
-    Sync {
-        /// Profile name (optional, syncs all if omitted)
-        name: Option<String>,
-    },
+    /// Fetch and store a subscription
+    Sync { name: Option<String> },
+    /// Activate a profile and write BNVR_HOME/config.yaml
+    Use { name: String },
     /// View config at a specific path
     View {
-        /// JSON path to navigate (e.g. proxies.0)
+        /// YAML path to navigate (e.g. proxies.0)
         path: Option<String>,
+        /// Profile name (defaults to the active profile)
+        #[arg(long)]
+        name: Option<String>,
     },
     /// Compare raw vs processed config
-    Diff,
+    Diff {
+        /// Profile name (defaults to the active profile)
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Merge multiple profiles
     Merge {
         /// Profile names to merge
         profiles: Vec<String>,
-        /// Output profile name
+        /// Output profile name (defaults to the sources joined with '+')
         #[arg(long)]
         out: Option<String>,
     },

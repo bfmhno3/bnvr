@@ -15,21 +15,6 @@ pub fn init_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> 
         PRAGMA journal_mode=WAL;
         PRAGMA foreign_keys=ON;
 
-        CREATE TABLE IF NOT EXISTS profiles (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT    NOT NULL UNIQUE,
-            url         TEXT    NOT NULL,
-            raw_config  TEXT,
-            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            profile_id  INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-            content     TEXT    NOT NULL,
-            fetched_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
 
         CREATE TABLE IF NOT EXISTS audit_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,8 +63,6 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
 
-        assert!(tables.contains(&"profiles".to_string()));
-        assert!(tables.contains(&"subscriptions".to_string()));
         assert!(tables.contains(&"audit_log".to_string()));
         assert!(tables.contains(&"bench_results".to_string()));
         assert!(tables.contains(&"traffic_stats".to_string()));
@@ -90,98 +73,6 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
         init_schema(&conn).unwrap(); // second call should not fail
-    }
-
-    #[test]
-    fn test_profiles_table_columns() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO profiles (name, url) VALUES ('test', 'http://example.com')",
-            [],
-        )
-        .unwrap();
-
-        let (name, url): (String, String) = conn
-            .query_row(
-                "SELECT name, url FROM profiles WHERE name='test'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-
-        assert_eq!(name, "test");
-        assert_eq!(url, "http://example.com");
-    }
-
-    #[test]
-    fn test_profiles_unique_name_constraint() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO profiles (name, url) VALUES ('dup', 'http://a.com')",
-            [],
-        )
-        .unwrap();
-        let result = conn.execute(
-            "INSERT INTO profiles (name, url) VALUES ('dup', 'http://b.com')",
-            [],
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_subscriptions_foreign_key() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')",
-            [],
-        )
-        .unwrap();
-
-        conn.execute(
-            "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'content')",
-            [],
-        )
-        .unwrap();
-
-        let content: String = conn
-            .query_row(
-                "SELECT content FROM subscriptions WHERE profile_id=1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(content, "content");
-    }
-
-    #[test]
-    fn test_subscriptions_cascade_delete() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'content')",
-            [],
-        )
-        .unwrap();
-
-        conn.execute("DELETE FROM profiles WHERE id=1", []).unwrap();
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM subscriptions", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 0);
     }
 
     #[test]

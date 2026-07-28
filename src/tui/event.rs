@@ -9,14 +9,18 @@ pub enum AppEvent {
 
 pub async fn run_event_loop(tx: mpsc::Sender<AppEvent>) {
     loop {
-        if event::poll(Duration::from_millis(200)).unwrap_or(false) {
-            if let Ok(Event::Key(key)) = event::read() {
-                if tx.send(AppEvent::Key(key)).await.is_err() {
+        match event::poll(Duration::from_millis(200)) {
+            Ok(true) => match event::read() {
+                Ok(Event::Key(key)) if tx.send(AppEvent::Key(key)).await.is_err() => return,
+                Ok(_) => {}
+                Err(_) => return,
+            },
+            Ok(false) => {
+                if tx.send(AppEvent::Tick).await.is_err() {
                     return;
                 }
             }
-        } else if tx.send(AppEvent::Tick).await.is_err() {
-            return;
+            Err(_) => return,
         }
     }
 }

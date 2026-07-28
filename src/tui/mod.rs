@@ -15,32 +15,69 @@ use app::AppState;
 use event::AppEvent;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // Set panic hook to restore terminal on crash
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
-        original_hook(info);
-    }));
-
-    let result = run_app(&mut terminal).await;
-
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
+    let mut session = TerminalSession::new()?;
+    let result = run_app(session.terminal()).await;
+    session.restore()?;
     result
+}
+
+struct TerminalSession {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    restored: bool,
+}
+
+impl TerminalSession {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        if let Err(e) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+            let _ = disable_raw_mode();
+            return Err(e.into());
+        }
+        let backend = CrosstermBackend::new(stdout);
+        match Terminal::new(backend) {
+            Ok(terminal) => Ok(Self {
+                terminal,
+                restored: false,
+            }),
+            Err(e) => {
+                let _ = disable_raw_mode();
+                let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+                Err(e.into())
+            }
+        }
+    }
+
+    fn terminal(&mut self) -> &mut Terminal<CrosstermBackend<io::Stdout>> {
+        &mut self.terminal
+    }
+
+    fn restore(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        disable_raw_mode()?;
+        execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        self.terminal.show_cursor()?;
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if self.restored {
+            return;
+        }
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        let _ = self.terminal.show_cursor();
+    }
 }
 
 async fn run_app(
@@ -48,7 +85,6 @@ async fn run_app(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = AppState::new();
 
-    // Attempt daemon connection
     state.daemon_connected = try_connect_daemon().await;
 
     let (tx, mut rx) = mpsc::channel(32);
@@ -62,6 +98,8 @@ async fn run_app(
                 AppEvent::Key(key) => event::handle_key(key, &mut state),
                 AppEvent::Tick => {}
             }
+        } else {
+            break;
         }
 
         if state.should_quit {
@@ -74,8 +112,8 @@ async fn run_app(
 
 async fn try_connect_daemon() -> bool {
     use interprocess::local_socket::tokio::Stream;
-    use interprocess::local_socket::{GenericNamespaced, ToNsName};
     use interprocess::local_socket::traits::tokio::Stream as _;
+    use interprocess::local_socket::{GenericNamespaced, ToNsName};
 
     let name = "bnvr".to_ns_name::<GenericNamespaced>();
     match name {

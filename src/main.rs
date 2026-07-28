@@ -122,54 +122,56 @@ async fn main() {
                         }
                         println!("profile '{}' deleted", name);
                     }
-                    ProfileAction::List => {
-                        match profile::crud::list(&conn) {
-                            Ok(profiles) => {
-                                if profiles.is_empty() {
-                                    println!("no profiles configured");
+                    ProfileAction::List => match profile::crud::list(&conn) {
+                        Ok(profiles) => {
+                            if profiles.is_empty() {
+                                println!("no profiles configured");
+                            } else {
+                                for p in &profiles {
+                                    let sync_status = if p.raw_config.is_some() {
+                                        "synced"
+                                    } else {
+                                        "not synced"
+                                    };
+                                    println!("  {} [{}] {}", p.name, sync_status, p.url);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("failed to list profiles: {e}");
+                            std::process::exit(1);
+                        }
+                    },
+                    ProfileAction::Sync { name } => match name {
+                        Some(n) => match profile::sync::sync_one(&conn, &n).await {
+                            Ok(r) => println!("synced '{}': {} bytes", r.name, r.bytes),
+                            Err(e) => {
+                                eprintln!("sync failed: {e}");
+                                std::process::exit(1);
+                            }
+                        },
+                        None => match profile::sync::sync_all(&conn).await {
+                            Ok(results) => {
+                                if results.synced.is_empty() && results.failed.is_empty() {
+                                    println!("no profiles to sync");
                                 } else {
-                                    for p in &profiles {
-                                        let sync_status = if p.raw_config.is_some() { "synced" } else { "not synced" };
-                                        println!("  {} [{}] {}", p.name, sync_status, p.url);
+                                    for r in &results.synced {
+                                        println!("synced '{}': {} bytes", r.name, r.bytes);
+                                    }
+                                    for failure in &results.failed {
+                                        eprintln!("failed '{}': {}", failure.name, failure.error);
+                                    }
+                                    if !results.failed.is_empty() {
+                                        std::process::exit(1);
                                     }
                                 }
                             }
                             Err(e) => {
-                                eprintln!("failed to list profiles: {e}");
+                                eprintln!("sync failed: {e}");
                                 std::process::exit(1);
                             }
-                        }
-                    }
-                    ProfileAction::Sync { name } => {
-                        match name {
-                            Some(n) => {
-                                match profile::sync::sync_one(&conn, &n).await {
-                                    Ok(r) => println!("synced '{}': {} bytes", r.name, r.bytes),
-                                    Err(e) => {
-                                        eprintln!("sync failed: {e}");
-                                        std::process::exit(1);
-                                    }
-                                }
-                            }
-                            None => {
-                                match profile::sync::sync_all(&conn).await {
-                                    Ok(results) => {
-                                        if results.is_empty() {
-                                            println!("no profiles to sync");
-                                        } else {
-                                            for r in &results {
-                                                println!("synced '{}': {} bytes", r.name, r.bytes);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("sync failed: {e}");
-                                        std::process::exit(1);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                        },
+                    },
                     ProfileAction::View { path } => {
                         // Default to first profile if no name specified
                         let profiles = match profile::crud::list(&conn) {

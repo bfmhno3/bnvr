@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 #[derive(Debug)]
 pub struct ProfileInfo {
@@ -40,7 +40,8 @@ pub fn list(conn: &Connection) -> Result<Vec<ProfileInfo>, Box<dyn std::error::E
             updated_at: row.get(5)?,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn get(conn: &Connection, name: &str) -> Result<ProfileInfo, Box<dyn std::error::Error>> {

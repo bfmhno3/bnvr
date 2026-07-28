@@ -1,17 +1,26 @@
 use bnvr::daemon::{db, ipc};
 use bnvr::paths;
 use interprocess::local_socket::tokio::Stream;
-use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use interprocess::local_socket::traits::tokio::Stream as _;
+use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use rusqlite::Connection;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 // Helper: start a test IPC listener on a unique socket name
 fn start_test_listener(
     socket_name: &str,
-) -> tokio::task::JoinHandle<Result<(), String>> {
+) -> (
+    tokio::task::JoinHandle<Result<(), String>>,
+    tokio::sync::watch::Receiver<bool>,
+) {
     let name = socket_name.to_string();
-    tokio::spawn(async move { ipc::listen_on(&name, None).await.map_err(|e| e.to_string()) })
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(async move {
+        ipc::listen_on(&name, None, shutdown_tx)
+            .await
+            .map_err(|e| e.to_string())
+    });
+    (handle, shutdown_rx)
 }
 
 // Helper: connect to a test socket and send a request, return the response
@@ -19,17 +28,25 @@ async fn send_test_request(
     socket_name: &str,
     request: &ipc::Request,
 ) -> Result<ipc::Response, String> {
-    let ns_name = socket_name.to_ns_name::<GenericNamespaced>().map_err(|e| e.to_string())?;
+    let ns_name = socket_name
+        .to_ns_name::<GenericNamespaced>()
+        .map_err(|e| e.to_string())?;
     let mut stream = Stream::connect(ns_name).await.map_err(|e| e.to_string())?;
 
     let mut msg = serde_json::to_string(request).map_err(|e| e.to_string())?;
     msg.push('\n');
-    stream.write_all(msg.as_bytes()).await.map_err(|e| e.to_string())?;
+    stream
+        .write_all(msg.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
 
     let (recv_half, _) = stream.split();
     let mut reader = tokio::io::BufReader::new(recv_half);
     let mut line = String::new();
-    reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
+    reader
+        .read_line(&mut line)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let resp: ipc::Response = serde_json::from_str(&line).map_err(|e| e.to_string())?;
     Ok(resp)
@@ -41,7 +58,7 @@ async fn send_test_request(
 async fn test_ipc_status_roundtrip() {
     let socket_name = "bnvr_test_status";
 
-    let _handle = start_test_listener(socket_name);
+    let (_handle, _shutdown_rx) = start_test_listener(socket_name);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let req = ipc::Request {
@@ -62,7 +79,7 @@ async fn test_ipc_status_roundtrip() {
 async fn test_ipc_unknown_method() {
     let socket_name = "bnvr_test_unknown";
 
-    let _handle = start_test_listener(socket_name);
+    let (_handle, _shutdown_rx) = start_test_listener(socket_name);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let req = ipc::Request {
@@ -82,7 +99,7 @@ async fn test_ipc_unknown_method() {
 async fn test_ipc_invalid_json() {
     let socket_name = "bnvr_test_invalid_json";
 
-    let _handle = start_test_listener(socket_name);
+    let (_handle, _shutdown_rx) = start_test_listener(socket_name);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let ns_name = socket_name.to_ns_name::<GenericNamespaced>().unwrap();
@@ -105,7 +122,7 @@ async fn test_ipc_invalid_json() {
 async fn test_ipc_multiple_requests_same_connection() {
     let socket_name = "bnvr_test_multi";
 
-    let _handle = start_test_listener(socket_name);
+    let (_handle, _shutdown_rx) = start_test_listener(socket_name);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let ns_name = socket_name.to_ns_name::<GenericNamespaced>().unwrap();
@@ -136,7 +153,7 @@ async fn test_ipc_multiple_requests_same_connection() {
 async fn test_ipc_multiple_concurrent_clients() {
     let socket_name = "bnvr_test_concurrent";
 
-    let _handle = start_test_listener(socket_name);
+    let (_handle, _shutdown_rx) = start_test_listener(socket_name);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let mut handles = Vec::new();
@@ -159,6 +176,43 @@ async fn test_ipc_multiple_concurrent_clients() {
     }
 }
 
+#[tokio::test]
+async fn test_ipc_shutdown_notifies_watch_receiver() {
+    let socket_name = "bnvr_test_shutdown";
+
+    let (_handle, mut shutdown_rx) = start_test_listener(socket_name);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let req = ipc::Request {
+        id: 6,
+        method: "shutdown".to_string(),
+        params: serde_json::Value::Null,
+    };
+
+    let resp = send_test_request(socket_name, &req).await.unwrap();
+    assert_eq!(resp.id, 6);
+    assert!(resp.error.is_none());
+    assert!(resp.result.is_none());
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), shutdown_rx.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(*shutdown_rx.borrow());
+    assert!(bnvr::daemon::process::is_alive(std::process::id()));
+}
+
+#[tokio::test]
+async fn test_ipc_client_connection_failure_returns_error() {
+    let req = ipc::Request {
+        id: 7,
+        method: "shutdown".to_string(),
+        params: serde_json::Value::Null,
+    };
+
+    let result = ipc::send_request(&req).await;
+    assert!(result.is_err());
+}
 // ── DB Integration Tests ─────────────────────────────────────────────
 
 #[test]
@@ -231,7 +285,9 @@ fn test_db_full_workflow() {
     assert_eq!(audit_count, 1);
 
     let bench_node: String = conn
-        .query_row("SELECT node FROM bench_results WHERE id=1", [], |row| row.get(0))
+        .query_row("SELECT node FROM bench_results WHERE id=1", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(bench_node, "jp-1");
 
@@ -251,8 +307,11 @@ fn test_db_delete_profile_cascades() {
     let conn = Connection::open_in_memory().unwrap();
     db::init_schema(&conn).unwrap();
 
-    conn.execute("INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')", [])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')",
+        [],
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'data')",
         [],

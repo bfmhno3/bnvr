@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -14,6 +15,7 @@ struct KernelState {
     child: Option<Child>,
     version: Option<String>,
     restart_on_crash: bool,
+    desired_running: bool,
 }
 
 impl KernelManager {
@@ -23,6 +25,7 @@ impl KernelManager {
                 child: None,
                 version: None,
                 restart_on_crash: true,
+                desired_running: false,
             })),
         }
     }
@@ -35,7 +38,6 @@ impl KernelManager {
             if let Some(pid) = child.id() {
                 return Err(format!("kernel already running (pid {pid})").into());
             }
-            // Child exited, clean up
             state.child = None;
         }
 
@@ -57,17 +59,20 @@ impl KernelManager {
 
         state.child = Some(child);
         state.version = Some(version);
+        state.desired_running = true;
 
         Ok(pid)
     }
 
     /// Stop the running kernel.
     pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut state = self.inner.lock().await;
+        let mut child = {
+            let mut state = self.inner.lock().await;
+            state.desired_running = false;
+            state.child.take().ok_or("kernel not running")?
+        };
 
-        let child = state.child.as_mut().ok_or("kernel not running")?;
         child.kill().await?;
-        state.child = None;
         info!("mihomo stopped");
 
         Ok(())
@@ -92,89 +97,96 @@ impl KernelManager {
 
         tokio::spawn(async move {
             loop {
-                // Wait until we have a child
-                let wait_result = {
+                let exited = {
                     let mut state = inner.lock().await;
                     match state.child.as_mut() {
-                        Some(child) => Some(child.wait().await),
-                        None => None,
+                        Some(child) => match child.try_wait() {
+                            Ok(Some(status)) => {
+                                warn!("mihomo exited with status: {status}");
+                                state.child = None;
+                                true
+                            }
+                            Ok(None) => false,
+                            Err(e) => {
+                                error!("failed to poll mihomo: {e}");
+                                state.child = None;
+                                true
+                            }
+                        },
+                        None => false,
                     }
                 };
 
-                let result = match wait_result {
-                    Some(r) => r,
-                    None => {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if !exited {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+
+                let version = {
+                    let state = inner.lock().await;
+                    if !state.desired_running || !state.restart_on_crash || state.child.is_some() {
                         continue;
                     }
-                };
-
-                let should_restart = match result {
-                    Ok(status) => {
-                        warn!("mihomo exited with status: {status}");
-                        true
-                    }
-                    Err(e) => {
-                        error!("failed to wait on mihomo: {e}");
-                        true
+                    match state.version.clone() {
+                        Some(version) => version,
+                        None => continue,
                     }
                 };
-
-                // Clean up the dead child
-                {
-                    let mut state = inner.lock().await;
-                    state.child = None;
-                }
-
-                if !should_restart {
-                    break;
-                }
-
-                // Check if restart is enabled
-                {
-                    let state = inner.lock().await;
-                    if !state.restart_on_crash {
-                        info!("restart_on_crash disabled, not restarting");
-                        break;
-                    }
-                }
 
                 warn!("restarting mihomo in 3 seconds...");
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
 
-                let version_opt = {
-                    let state = inner.lock().await;
-                    state.version.clone()
-                };
-
-                let Some(version) = version_opt else {
-                    break;
-                };
-
-                let binary = paths::kernel_binary_path(&version);
-                if !binary.exists() {
-                    error!("binary not found: {}", binary.display());
-                    break;
-                }
-
-                match Command::new(&binary)
-                    .arg("-d")
-                    .arg(paths::bnvr_home())
-                    .spawn()
-                {
-                    Ok(child) => {
-                        let pid = child.id().unwrap_or(0);
-                        info!(pid, "mihomo restarted");
-                        let mut state = inner.lock().await;
-                        state.child = Some(child);
+                loop {
+                    {
+                        let state = inner.lock().await;
+                        if !state.desired_running
+                            || !state.restart_on_crash
+                            || state.child.is_some()
+                        {
+                            break;
+                        }
                     }
-                    Err(e) => {
-                        error!("failed to restart mihomo: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    let binary = paths::kernel_binary_path(&version);
+                    if !binary.exists() {
+                        error!("binary not found: {}", binary.display());
+                        break;
+                    }
+
+                    match Command::new(&binary)
+                        .arg("-d")
+                        .arg(paths::bnvr_home())
+                        .spawn()
+                    {
+                        Ok(mut child) => {
+                            let pid = child.id().unwrap_or(0);
+                            info!(pid, version = %version, "mihomo restarted");
+                            let mut state = inner.lock().await;
+                            if state.desired_running && state.child.is_none() {
+                                state.child = Some(child);
+                            } else {
+                                drop(state);
+                                if let Err(e) = child.kill().await {
+                                    error!(error = %e, version = %version, "failed to stop discarded mihomo restart");
+                                }
+                                let _ = child.wait().await;
+                            }
+                            break;
+                        }
+                        Err(e) => {
+                            error!(error = %e, version = %version, "failed to restart mihomo");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
                     }
                 }
             }
         })
+    }
+}
+
+impl Default for KernelManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -209,9 +221,46 @@ mod tests {
     async fn test_kernel_manager_start_returns_result() {
         let km = KernelManager::new();
         let result = km.start().await;
-        // start() should return a Result -- either Ok(pid) if a kernel is
-        // configured and the binary exists, or Err if not.  We just verify
-        // the function is callable and doesn't panic.
         let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_monitor_stop_does_not_deadlock_or_restart() {
+        let km = KernelManager::new();
+        let child = long_running_child();
+        let pid = child.id().unwrap();
+        {
+            let mut state = km.inner.lock().await;
+            state.child = Some(child);
+            state.version = Some("test-version".to_string());
+            state.desired_running = true;
+        }
+
+        let monitor = km.spawn_monitor();
+        let status = tokio::time::timeout(Duration::from_secs(1), km.status())
+            .await
+            .unwrap();
+        assert_eq!(status.pid, Some(pid));
+
+        tokio::time::timeout(Duration::from_secs(1), km.stop())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+
+        let status = km.status().await;
+        assert!(!status.running);
+        monitor.abort();
+    }
+
+    fn long_running_child() -> Child {
+        if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .args(["/C", "ping", "-t", "127.0.0.1"])
+                .spawn()
+                .unwrap()
+        } else {
+            Command::new("sleep").arg("30").spawn().unwrap()
+        }
     }
 }

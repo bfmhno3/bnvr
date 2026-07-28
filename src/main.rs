@@ -54,7 +54,11 @@ async fn main() {
                     } else {
                         for k in &installed {
                             let marker = if k.active { " *" } else { "" };
-                            let status = if k.binary_exists { "ok" } else { "missing binary" };
+                            let status = if k.binary_exists {
+                                "ok"
+                            } else {
+                                "missing binary"
+                            };
                             println!("  {} [{}]{}", k.version, status, marker);
                         }
                     }
@@ -221,34 +225,30 @@ async fn main() {
                     std::process::exit(1);
                 }
                 match action {
-                    OverwriteAction::Init { name } => {
-                        match overwrite::crud::init(&name) {
-                            Ok(dir) => println!("plugin '{}' created at {}", name, dir.display()),
-                            Err(e) => {
-                                eprintln!("init failed: {e}");
-                                std::process::exit(1);
-                            }
+                    OverwriteAction::Init { name } => match overwrite::crud::init(&name) {
+                        Ok(dir) => println!("plugin '{}' created at {}", name, dir.display()),
+                        Err(e) => {
+                            eprintln!("init failed: {e}");
+                            std::process::exit(1);
                         }
-                    }
-                    OverwriteAction::List => {
-                        match overwrite::crud::list() {
-                            Ok(plugins) => {
-                                if plugins.is_empty() {
-                                    println!("no plugins installed");
-                                } else {
-                                    for p in &plugins {
-                                        let marker = if p.active { " *" } else { "" };
-                                        let venv = if p.has_venv { "ok" } else { "no venv" };
-                                        println!("  {} [{}]{}", p.name, venv, marker);
-                                    }
+                    },
+                    OverwriteAction::List => match overwrite::crud::list() {
+                        Ok(plugins) => {
+                            if plugins.is_empty() {
+                                println!("no plugins installed");
+                            } else {
+                                for p in &plugins {
+                                    let marker = if p.active { " *" } else { "" };
+                                    let venv = if p.has_venv { "ok" } else { "no venv" };
+                                    println!("  {} [{}]{}", p.name, venv, marker);
                                 }
                             }
-                            Err(e) => {
-                                eprintln!("list failed: {e}");
-                                std::process::exit(1);
-                            }
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("list failed: {e}");
+                            std::process::exit(1);
+                        }
+                    },
                     OverwriteAction::Use { name } => {
                         if let Err(e) = overwrite::crud::set_active(&name) {
                             eprintln!("failed: {e}");
@@ -256,15 +256,13 @@ async fn main() {
                         }
                         println!("active plugin set to {}", name);
                     }
-                    OverwriteAction::Git { args } => {
-                        match overwrite::git::run_git_active(&args) {
-                            Ok(output) => print!("{}", output),
-                            Err(e) => {
-                                eprintln!("git failed: {e}");
-                                std::process::exit(1);
-                            }
+                    OverwriteAction::Git { args } => match overwrite::git::run_git_active(&args) {
+                        Ok(output) => print!("{}", output),
+                        Err(e) => {
+                            eprintln!("git failed: {e}");
+                            std::process::exit(1);
                         }
-                    }
+                    },
                 }
             }
             Commands::Network { action } => match action {

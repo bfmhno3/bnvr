@@ -1,5 +1,5 @@
-use crate::paths;
 use super::process;
+use crate::paths;
 use std::fs;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {

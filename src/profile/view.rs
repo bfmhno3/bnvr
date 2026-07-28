@@ -18,8 +18,9 @@ pub fn view(
     let json_val: serde_json::Value = serde_json::to_value(yaml_val)?;
 
     let target = match json_path {
-        Some(path) => navigate_path(&json_val, path)
-            .ok_or_else(|| format!("path not found: {path}"))?,
+        Some(path) => {
+            navigate_path(&json_val, path).ok_or_else(|| format!("path not found: {path}"))?
+        }
         None => &json_val,
     };
 
@@ -27,7 +28,10 @@ pub fn view(
     Ok(())
 }
 
-pub fn navigate_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+pub fn navigate_path<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
     let mut current = value;
     for segment in path.split('.') {
         current = match current {

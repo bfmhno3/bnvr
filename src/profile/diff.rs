@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use super::crud;
 
@@ -75,8 +75,12 @@ pub fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
             new_idx += 1;
         } else {
             // Simple heuristic: look ahead to find matching line
-            let old_ahead = old_lines[old_idx + 1..].iter().position(|l| *l == new_lines[new_idx]);
-            let new_ahead = new_lines[new_idx + 1..].iter().position(|l| *l == old_lines[old_idx]);
+            let old_ahead = old_lines[old_idx + 1..]
+                .iter()
+                .position(|l| *l == new_lines[new_idx]);
+            let new_ahead = new_lines[new_idx + 1..]
+                .iter()
+                .position(|l| *l == old_lines[old_idx]);
 
             match (old_ahead, new_ahead) {
                 (Some(o), Some(n)) if o <= n => {

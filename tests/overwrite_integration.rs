@@ -202,15 +202,19 @@ async fn test_bridge_with_real_python_all_hooks() {
 
     let config = serde_json::json!({"port": 7890});
 
-    for hook in &["preprocess", "postprocess", "on_node_switch", "on_network_dropped"] {
+    for hook in &[
+        "preprocess",
+        "postprocess",
+        "on_node_switch",
+        "on_network_dropped",
+    ] {
         let extra = if *hook == "on_node_switch" {
             serde_json::json!({"node_name": "jp-1"})
         } else {
             serde_json::Value::Null
         };
 
-        let result =
-            bridge::run_hook_in(&dir, "all-hooks", hook, config.clone(), extra).await;
+        let result = bridge::run_hook_in(&dir, "all-hooks", hook, config.clone(), extra).await;
 
         match result {
             Ok(output) => {
@@ -264,8 +268,14 @@ if __name__ == "__main__":
     fs::write(plugin_dir.join("overwrite.py"), script).unwrap();
 
     let config = serde_json::json!({"port": 7890});
-    let result =
-        bridge::run_hook_in(&dir, "custom", "preprocess", config, serde_json::Value::Null).await;
+    let result = bridge::run_hook_in(
+        &dir,
+        "custom",
+        "preprocess",
+        config,
+        serde_json::Value::Null,
+    )
+    .await;
 
     match result {
         Ok(output) => {

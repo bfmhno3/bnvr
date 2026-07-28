@@ -97,13 +97,18 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
-        conn.execute("INSERT INTO profiles (name, url) VALUES ('test', 'http://example.com')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO profiles (name, url) VALUES ('test', 'http://example.com')",
+            [],
+        )
+        .unwrap();
 
         let (name, url): (String, String) = conn
-            .query_row("SELECT name, url FROM profiles WHERE name='test'", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_row(
+                "SELECT name, url FROM profiles WHERE name='test'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
 
         assert_eq!(name, "test");
@@ -115,8 +120,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
-        conn.execute("INSERT INTO profiles (name, url) VALUES ('dup', 'http://a.com')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO profiles (name, url) VALUES ('dup', 'http://a.com')",
+            [],
+        )
+        .unwrap();
         let result = conn.execute(
             "INSERT INTO profiles (name, url) VALUES ('dup', 'http://b.com')",
             [],
@@ -129,8 +137,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
-        conn.execute("INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')",
+            [],
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'content')",
@@ -139,9 +150,11 @@ mod tests {
         .unwrap();
 
         let content: String = conn
-            .query_row("SELECT content FROM subscriptions WHERE profile_id=1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT content FROM subscriptions WHERE profile_id=1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
 
         assert_eq!(content, "content");
@@ -152,8 +165,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
 
-        conn.execute("INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO profiles (name, url) VALUES ('p1', 'http://a.com')",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO subscriptions (profile_id, content) VALUES (1, 'content')",
             [],
@@ -180,7 +196,9 @@ mod tests {
         .unwrap();
 
         let action: String = conn
-            .query_row("SELECT action FROM audit_log WHERE id=1", [], |row| row.get(0))
+            .query_row("SELECT action FROM audit_log WHERE id=1", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(action, "test_action");
     }
@@ -197,7 +215,9 @@ mod tests {
         .unwrap();
 
         let node: String = conn
-            .query_row("SELECT node FROM bench_results WHERE id=1", [], |row| row.get(0))
+            .query_row("SELECT node FROM bench_results WHERE id=1", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(node, "node1");
     }
@@ -224,5 +244,4 @@ mod tests {
         assert_eq!(bytes_up, 0);
         assert_eq!(bytes_down, 0);
     }
-
 }

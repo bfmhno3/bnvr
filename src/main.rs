@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bnvr::daemon;
 use bnvr::kernel;
+use bnvr::network;
 use bnvr::overwrite;
 use bnvr::profile;
 use clap::Parser;
@@ -42,7 +43,7 @@ async fn main() {
                     }
                 }
                 DaemonAction::Status => {
-                    if let Err(e) = daemon::status::run() {
+                    if let Err(e) = daemon::status::run().await {
                         eprintln!("daemon status failed: {e}");
                         std::process::exit(1);
                     }
@@ -190,7 +191,7 @@ async fn main() {
                             }
                         },
                     },
-                    ProfileAction::Use { name } => match profile::crud::activate(&name) {
+                    ProfileAction::Use { name } => match profile::crud::activate(&name).await {
                         Ok(path) => println!("active profile set to {name} -> {}", path.display()),
                         Err(e) => {
                             eprintln!("failed: {e}");
@@ -279,10 +280,25 @@ async fn main() {
             }
             Commands::Network { action } => match action {
                 NetworkAction::Tun { action } => match action {
-                    TunAction::Setup => println!("network tun setup"),
-                    TunAction::Clear => println!("network tun clear"),
+                    TunAction::Setup => {
+                        if let Err(e) = network::tun::setup_tun().await {
+                            eprintln!("network tun setup failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    TunAction::Clear => {
+                        if let Err(e) = network::tun::clear_tun().await {
+                            eprintln!("network tun clear failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
                 },
-                NetworkAction::Bypass { target } => println!("network bypass {}", target),
+                NetworkAction::Bypass { target } => {
+                    if let Err(e) = network::bypass::add_bypass_route(&target).await {
+                        eprintln!("network bypass failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
             },
             Commands::Bench { group } => {
                 println!("bench {}", group.unwrap_or_default())

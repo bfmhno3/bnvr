@@ -57,7 +57,7 @@ pub async fn run_hook_in(
     extra: serde_json::Value,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     paths::validate_component(plugin_name, "plugin name")?;
-    let plugin_dir = overwrite_dir.join(plugin_name);
+    let plugin_dir = overwrite_dir.join(plugin_name).join("overwrite");
     let venv = plugin_dir.join(".venv");
     let python = if cfg!(target_os = "windows") {
         venv.join("Scripts").join("python.exe")

@@ -65,16 +65,24 @@ pub fn active_plugin_file() -> PathBuf {
     overwrite_dir().join(".active")
 }
 
-pub fn plugin_dir(name: &str) -> PathBuf {
-    overwrite_dir().join(name)
+pub fn plugin_dir(username: &str) -> PathBuf {
+    overwrite_dir().join(username)
 }
 
-pub fn plugin_venv(name: &str) -> PathBuf {
-    plugin_dir(name).join(".venv")
+pub fn plugin_meta_file(username: &str) -> PathBuf {
+    plugin_dir(username).join("meta.json")
 }
 
-pub fn plugin_python(name: &str) -> PathBuf {
-    let venv = plugin_venv(name);
+pub fn plugin_repo_dir(username: &str) -> PathBuf {
+    plugin_dir(username).join("overwrite")
+}
+
+pub fn plugin_venv(username: &str) -> PathBuf {
+    plugin_repo_dir(username).join(".venv")
+}
+
+pub fn plugin_python(username: &str) -> PathBuf {
+    let venv = plugin_venv(username);
     if cfg!(target_os = "windows") {
         venv.join("Scripts").join("python.exe")
     } else {
@@ -82,8 +90,8 @@ pub fn plugin_python(name: &str) -> PathBuf {
     }
 }
 
-pub fn plugin_entry(name: &str) -> PathBuf {
-    plugin_dir(name).join("overwrite.py")
+pub fn plugin_entry(username: &str) -> PathBuf {
+    plugin_repo_dir(username).join("overwrite.py")
 }
 pub fn profiles_dir() -> PathBuf {
     bnvr_home().join("profile")
@@ -233,19 +241,26 @@ mod tests {
     }
 
     #[test]
+    fn test_plugin_meta_file() {
+        let path = plugin_meta_file("my-plugin");
+        assert_eq!(path.file_name().unwrap(), "meta.json");
+        assert!(path.parent().unwrap().ends_with("my-plugin"));
+    }
+
+    #[test]
     fn test_plugin_venv() {
         let path = plugin_venv("my-plugin");
         assert_eq!(path.file_name().unwrap(), ".venv");
-        assert!(path.parent().unwrap().ends_with("my-plugin"));
+        assert!(path.parent().unwrap().ends_with("overwrite"));
     }
 
     #[test]
     fn test_plugin_python_path() {
         let path = plugin_python("my-plugin");
         if cfg!(target_os = "windows") {
-            assert!(path.ends_with("Scripts\\python.exe"));
+            assert!(path.ends_with("overwrite\\.venv\\Scripts\\python.exe"));
         } else {
-            assert!(path.ends_with("bin/python"));
+            assert!(path.ends_with("overwrite/.venv/bin/python"));
         }
     }
 
@@ -253,7 +268,7 @@ mod tests {
     fn test_plugin_entry_name() {
         let path = plugin_entry("my-plugin");
         assert_eq!(path.file_name().unwrap(), "overwrite.py");
-        assert!(path.parent().unwrap().ends_with("my-plugin"));
+        assert!(path.parent().unwrap().ends_with("overwrite"));
     }
 
     #[test]

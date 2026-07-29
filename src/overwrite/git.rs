@@ -13,7 +13,7 @@ pub fn run_git_in(
     args: &[String],
 ) -> Result<String, Box<dyn std::error::Error>> {
     paths::validate_component(plugin_name, "plugin name")?;
-    let dir = overwrite_dir.join(plugin_name);
+    let dir = overwrite_dir.join(plugin_name).join("overwrite");
     if !dir.exists() {
         return Err(format!("plugin not found: {plugin_name}").into());
     }
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn test_run_git_init_and_status() {
         let dir = setup("init-status");
-        let plugin_dir = dir.join("test-git");
+        let plugin_dir = dir.join("test-git").join("overwrite");
         fs::create_dir_all(&plugin_dir).unwrap();
 
         let init_output = Command::new("git")
@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn test_run_git_with_active_plugin() {
         let dir = setup("active-git");
-        let plugin_dir = dir.join("my-plugin");
+        let plugin_dir = dir.join("my-plugin").join("overwrite");
         fs::create_dir_all(&plugin_dir).unwrap();
 
         let init_output = Command::new("git")

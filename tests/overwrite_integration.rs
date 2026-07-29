@@ -59,7 +59,8 @@ fn test_overwrite_py_contains_all_hooks() {
     let dir = setup("hooks-check");
     crud::init_in(&dir, "hook-test").unwrap();
 
-    let content = fs::read_to_string(dir.join("hook-test").join("overwrite.py")).unwrap();
+    let content =
+        fs::read_to_string(dir.join("hook-test").join("overwrite").join("overwrite.py")).unwrap();
     assert!(content.contains("def preprocess(config)"));
     assert!(content.contains("def postprocess(config)"));
     assert!(content.contains("def on_node_switch(config, node_name)"));
@@ -70,12 +71,55 @@ fn test_overwrite_py_contains_all_hooks() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn test_add_local_plugin_copies_files_and_meta() {
+    let dir = setup("add-local");
+    let source = dir.join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("overwrite.py"), "print('ok')").unwrap();
+
+    let home = dir.join("home");
+    fs::create_dir_all(&home).unwrap();
+    unsafe { std::env::set_var("BNVR_HOME", &home) };
+    let plugin = crud::add(
+        "local",
+        source.to_str().unwrap(),
+        crud::PluginKind::Local,
+        Some("1d"),
+        Some("30s"),
+    )
+    .unwrap();
+
+    assert!(plugin.join("meta.json").exists());
+    assert!(plugin.join("overwrite").join("overwrite.py").exists());
+    let meta = crud::read_plugin_meta("local").unwrap();
+    assert_eq!(meta.kind, crud::PluginKind::Local);
+    assert_eq!(meta.auto_sync.as_deref(), Some("1d"));
+    assert_eq!(meta.timeout.as_deref(), Some("30s"));
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn test_parse_duration_public_units() {
+    assert_eq!(bnvr::utilities::parse_duration("1s").unwrap().as_secs(), 1);
+    assert_eq!(
+        bnvr::utilities::parse_duration("2m").unwrap().as_secs(),
+        120
+    );
+    assert_eq!(
+        bnvr::utilities::parse_duration("1d").unwrap().as_secs(),
+        86400
+    );
+    assert!(bnvr::utilities::parse_duration("1h").is_err());
+}
+
 // ── Git Integration ─────────────────────────────────────────────────
 
 #[test]
 fn test_git_passthrough_init_and_status() {
     let dir = setup("git-passthrough");
-    let plugin_dir = dir.join("git-plugin");
+    let plugin_dir = dir.join("git-plugin").join("overwrite");
     fs::create_dir_all(&plugin_dir).unwrap();
 
     let init_out = std::process::Command::new("git")
@@ -100,7 +144,7 @@ fn test_git_passthrough_init_and_status() {
 #[test]
 fn test_git_passthrough_with_commit() {
     let dir = setup("git-commit");
-    let plugin_dir = dir.join("commit-plugin");
+    let plugin_dir = dir.join("commit-plugin").join("overwrite");
     fs::create_dir_all(&plugin_dir).unwrap();
 
     let init_out = std::process::Command::new("git")
@@ -144,7 +188,7 @@ async fn test_bridge_with_real_python_passthrough() {
     let dir = setup("bridge-real");
     crud::init_in(&dir, "passthrough").unwrap();
 
-    let venv = dir.join("passthrough").join(".venv");
+    let venv = dir.join("passthrough").join("overwrite").join(".venv");
     let python = if cfg!(target_os = "windows") {
         venv.join("Scripts").join("python.exe")
     } else {
@@ -188,7 +232,7 @@ async fn test_bridge_with_real_python_all_hooks() {
     let dir = setup("bridge-all-hooks");
     crud::init_in(&dir, "all-hooks").unwrap();
 
-    let venv = dir.join("all-hooks").join(".venv");
+    let venv = dir.join("all-hooks").join("overwrite").join(".venv");
     let python = if cfg!(target_os = "windows") {
         venv.join("Scripts").join("python.exe")
     } else {
@@ -232,7 +276,7 @@ async fn test_bridge_with_real_python_all_hooks() {
 #[tokio::test]
 async fn test_bridge_with_custom_python_script() {
     let dir = setup("bridge-custom");
-    let plugin_dir = dir.join("custom");
+    let plugin_dir = dir.join("custom").join("overwrite");
     fs::create_dir_all(&plugin_dir).unwrap();
 
     let venv_status = std::process::Command::new("uv")
@@ -314,7 +358,7 @@ async fn test_bridge_unknown_hook() {
     let dir = setup("bridge-unknown");
     crud::init_in(&dir, "unknown-hook").unwrap();
 
-    let venv = dir.join("unknown-hook").join(".venv");
+    let venv = dir.join("unknown-hook").join("overwrite").join(".venv");
     let python = if cfg!(target_os = "windows") {
         venv.join("Scripts").join("python.exe")
     } else {

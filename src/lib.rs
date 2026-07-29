@@ -7,3 +7,4 @@ pub mod profile;
 #[cfg(test)]
 pub mod test_env;
 pub mod tui;
+pub mod utilities;

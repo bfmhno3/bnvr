@@ -9,7 +9,8 @@ use tokio::sync::watch;
 use tracing::{error, info};
 
 use super::state::DaemonState;
-use crate::{daemon::db, network::bypass, overwrite, profile::crud};
+use crate::utilities::mihomo_api::{MihomoClient, ProxyInfo};
+use crate::{daemon::db, network::bypass, overwrite, paths, profile::crud};
 
 const SOCKET_NAME: &str = "bnvr";
 
@@ -262,6 +263,12 @@ async fn handle_request(
             }
             Ok(serde_json::json!({"status": "ok"}))
         }
+        "tui.status" => tui_status(state).await,
+        "tui.nodes" => tui_nodes().await,
+        "tui.traffic" => {
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            Ok(serde_json::json!({ "samples": daemon.traffic.get_samples(60).await }))
+        }
         _ => Err(format!("unknown method: {}", req.method).into()),
     }
 }
@@ -288,6 +295,82 @@ async fn restart_kernel(
         let _pid = kernel.start().await?;
     }
     Ok(())
+}
+
+async fn tui_status(state: &IpcState) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+    let kernel = daemon.kernel.status().await;
+    let profiles = crud::list()?;
+    let profile_names: Vec<String> = profiles.into_iter().map(|profile| profile.name).collect();
+    let plugins = overwrite::crud::list()?;
+    let plugin_names: Vec<String> = plugins.into_iter().map(|plugin| plugin.username).collect();
+    let conn = db::open()?;
+    let stats = db::get_connection_stats(&conn)?;
+
+    Ok(serde_json::json!({
+        "daemon": { "pid": std::process::id(), "uptime_secs": 0_u64 },
+        "profile": { "active": crud::get_active(), "list": profile_names },
+        "kernel": { "running": kernel.running, "pid": kernel.pid, "version": kernel.version },
+        "plugin": { "active": overwrite::crud::get_active(), "list": plugin_names },
+        "connections": {
+            "total": stats.total,
+            "upload_bytes": stats.upload_bytes,
+            "download_bytes": stats.download_bytes,
+        }
+    }))
+}
+
+async fn tui_nodes() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let client = MihomoClient::new(9090);
+    let api_nodes = client.get_proxies().await.unwrap_or_default();
+    let current = client.get_current_proxy().await.unwrap_or(None);
+    let nodes = if api_nodes.is_empty() {
+        profile_nodes().unwrap_or_default()
+    } else {
+        api_nodes
+    };
+    Ok(serde_json::json!({ "nodes": nodes, "current": current }))
+}
+
+fn profile_nodes() -> Result<Vec<ProxyInfo>, Box<dyn std::error::Error>> {
+    let Some(active) = crud::get_active() else {
+        return Ok(Vec::new());
+    };
+    let content = crud::read_processed(&active).unwrap_or_else(|| {
+        std::fs::read_to_string(paths::profile_raw_file(&active)).unwrap_or_default()
+    });
+    if content.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_yaml::Value = serde_yaml::from_str(&content)?;
+    let Some(proxies) = value
+        .get(serde_yaml::Value::String("proxies".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut nodes = Vec::new();
+    for proxy in proxies {
+        let Some(mapping) = proxy.as_mapping() else {
+            continue;
+        };
+        let name = mapping
+            .get(serde_yaml::Value::String("name".to_string()))
+            .and_then(serde_yaml::Value::as_str);
+        let proxy_type = mapping
+            .get(serde_yaml::Value::String("type".to_string()))
+            .and_then(serde_yaml::Value::as_str)
+            .unwrap_or("unknown");
+        if let Some(name) = name {
+            nodes.push(ProxyInfo {
+                name: name.to_string(),
+                proxy_type: proxy_type.to_string(),
+                delay: None,
+            });
+        }
+    }
+    Ok(nodes)
 }
 
 #[cfg(test)]

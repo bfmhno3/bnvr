@@ -30,6 +30,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => info!("kernel not started: {e}"),
     }
 
+    let traffic_handle = daemon_state
+        .traffic
+        .spawn_collector("http://127.0.0.1:9090".to_string());
+
     let monitor_handle = km.spawn_monitor();
     let health_handle = tokio::spawn(super::core::start_health_monitor(daemon_state.clone()));
     let auto_sync_handle =
@@ -74,6 +78,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     ipc_handle.abort();
     health_handle.abort();
     auto_sync_handle.abort();
+    traffic_handle.abort();
 
     let _ = fs::remove_file(&pid_path);
     info!("daemon stopped");

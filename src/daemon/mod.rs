@@ -7,4 +7,5 @@ pub mod state;
 pub mod status;
 pub mod stop;
 pub mod tracing_init;
+pub mod traffic_monitor;
 pub mod tun_state;

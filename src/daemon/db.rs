@@ -2,6 +2,13 @@ use rusqlite::{Connection, params};
 
 use crate::paths;
 
+#[derive(Debug, Clone)]
+pub struct ConnectionStats {
+    pub total: usize,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+}
+
 pub fn open() -> Result<Connection, Box<dyn std::error::Error>> {
     let db_path = paths::db_file();
     let conn = Connection::open(&db_path)?;
@@ -70,6 +77,22 @@ pub fn remove_bypass_route(conn: &Connection, target: &str) -> rusqlite::Result<
         params![target],
     )?;
     Ok(())
+}
+
+pub fn get_connection_stats(conn: &Connection) -> rusqlite::Result<ConnectionStats> {
+    let total = conn.query_row("SELECT COUNT(*) FROM traffic_stats", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    let (upload_bytes, download_bytes) = conn.query_row(
+        "SELECT COALESCE(SUM(bytes_up), 0), COALESCE(SUM(bytes_down), 0) FROM traffic_stats",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    Ok(ConnectionStats {
+        total: usize::try_from(total).unwrap_or_default(),
+        upload_bytes: u64::try_from(upload_bytes).unwrap_or_default(),
+        download_bytes: u64::try_from(download_bytes).unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]

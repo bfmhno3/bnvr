@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tracing::{error, info};
 
 use super::state::DaemonState;
-use crate::{daemon::db, network::bypass, profile::crud};
+use crate::{daemon::db, network::bypass, overwrite, profile::crud};
 
 const SOCKET_NAME: &str = "bnvr";
 
@@ -38,6 +38,11 @@ struct IpcState {
 #[derive(Debug, Deserialize)]
 struct BypassParams {
     target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SwitchNodeParams {
+    node_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,6 +243,24 @@ async fn handle_request(
             };
             reload_active_profile(daemon, device.as_deref()).await?;
             Ok(serde_json::json!({ "target": target }))
+        }
+        "switch_node" => {
+            let params: SwitchNodeParams = serde_json::from_value(req.params.clone())?;
+            if let Some(active_plugin) = overwrite::crud::get_active() {
+                let config = serde_json::json!({});
+                let extra = serde_json::json!({"node_name": params.node_name});
+                match overwrite::bridge::run_hook(&active_plugin, "on_node_switch", config, extra)
+                    .await
+                {
+                    Ok(_) => {
+                        info!(plugin = %active_plugin, node = %params.node_name, "on_node_switch hook completed")
+                    }
+                    Err(e) => {
+                        error!(plugin = %active_plugin, node = %params.node_name, error = %e, "on_node_switch hook failed")
+                    }
+                }
+            }
+            Ok(serde_json::json!({"status": "ok"}))
         }
         _ => Err(format!("unknown method: {}", req.method).into()),
     }

@@ -4,8 +4,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::kernel::manage;
-use crate::paths;
+use crate::{kernel::manage, overwrite, paths, profile, utilities};
 
 pub struct KernelManager {
     inner: Arc<Mutex<KernelState>>,
@@ -194,6 +193,173 @@ pub struct KernelManagerStatus {
     pub running: bool,
     pub pid: Option<u32>,
     pub version: Option<String>,
+}
+
+pub async fn start_health_monitor(_state: Arc<super::state::DaemonState>) {
+    let client = reqwest::Client::builder()
+        .user_agent("bnvr")
+        .timeout(Duration::from_secs(5))
+        .build();
+    let Ok(client) = client else {
+        warn!("health monitor disabled: failed to build HTTP client");
+        return;
+    };
+    let mut was_alive = true;
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let response = client.get("http://127.0.0.1:9090/proxies").send().await;
+        let Ok(response) = response else {
+            warn!("health monitor skipped: Mihomo API unavailable");
+            continue;
+        };
+        let value = match response.json::<serde_json::Value>().await {
+            Ok(value) => value,
+            Err(e) => {
+                warn!(error = %e, "health monitor skipped: invalid Mihomo response");
+                continue;
+            }
+        };
+        let alive = value
+            .get("proxies")
+            .and_then(|proxies| proxies.as_object())
+            .and_then(|proxies| proxies.values().find_map(|proxy| proxy.get("alive")))
+            .and_then(|alive| alive.as_bool())
+            .unwrap_or(true);
+
+        if was_alive
+            && !alive
+            && let Some(active_plugin) = overwrite::crud::get_active()
+        {
+            match overwrite::bridge::run_hook(
+                &active_plugin,
+                "on_network_dropped",
+                serde_json::json!({}),
+                serde_json::Value::Null,
+            )
+            .await
+            {
+                Ok(_) => {
+                    warn!(plugin = %active_plugin, "on_network_dropped hook triggered due to unhealthy node")
+                }
+                Err(e) => {
+                    error!(plugin = %active_plugin, error = %e, "on_network_dropped hook failed")
+                }
+            }
+        }
+        was_alive = alive;
+    }
+}
+
+pub async fn start_auto_sync_scheduler(_state: Arc<super::state::DaemonState>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        run_auto_sync_cycle().await;
+    }
+}
+
+pub async fn run_auto_sync_cycle() {
+    let now = profile::crud::now_secs();
+    match profile::crud::list() {
+        Ok(profiles) => {
+            for item in profiles {
+                let Some(auto_sync) = item.meta.auto_sync.as_deref() else {
+                    continue;
+                };
+                let interval = match utilities::effective_auto_sync_duration(
+                    auto_sync,
+                    item.meta.timeout.as_deref(),
+                ) {
+                    Ok(interval) => interval.as_secs(),
+                    Err(e) => {
+                        error!(type = "profile", name = %item.name, error = %e, "invalid auto-sync interval");
+                        continue;
+                    }
+                };
+                let last_sync = item.meta.updated_at.unwrap_or(item.meta.created_at);
+                if now.saturating_sub(last_sync) < interval {
+                    continue;
+                }
+                let name = item.name;
+                let timeout = item
+                    .meta
+                    .timeout
+                    .as_deref()
+                    .map(utilities::parse_duration)
+                    .transpose()
+                    .ok()
+                    .flatten()
+                    .unwrap_or(Duration::from_secs(30));
+                info!(type = "profile", name = %name, "auto-sync triggered");
+                tokio::spawn(async move {
+                    match tokio::time::timeout(timeout, profile::sync::sync_one(&name)).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            error!(type = "profile", name = %name, error = %e, "auto-sync failed")
+                        }
+                        Err(_) => error!(type = "profile", name = %name, "auto-sync timed out"),
+                    }
+                });
+            }
+        }
+        Err(e) => error!(error = %e, "failed to list profiles for auto-sync"),
+    }
+
+    match overwrite::crud::list() {
+        Ok(plugins) => {
+            for item in plugins {
+                let Some(meta) = item.meta else {
+                    continue;
+                };
+                let Some(auto_sync) = meta.auto_sync.as_deref() else {
+                    continue;
+                };
+                let interval = match utilities::effective_auto_sync_duration(
+                    auto_sync,
+                    meta.timeout.as_deref(),
+                ) {
+                    Ok(interval) => interval.as_secs(),
+                    Err(e) => {
+                        error!(type = "overwrite", name = %item.username, error = %e, "invalid auto-sync interval");
+                        continue;
+                    }
+                };
+                let last_sync = meta.updated_at.unwrap_or(meta.created_at);
+                if now.saturating_sub(last_sync) < interval {
+                    continue;
+                }
+                let username = item.username;
+                let timeout = meta
+                    .timeout
+                    .as_deref()
+                    .map(utilities::parse_duration)
+                    .transpose()
+                    .ok()
+                    .flatten()
+                    .unwrap_or(Duration::from_secs(30));
+                info!(type = "overwrite", name = %username, "auto-sync triggered");
+                tokio::spawn(async move {
+                    let task = tokio::task::spawn_blocking({
+                        let username = username.clone();
+                        move || overwrite::crud::update(&username).map_err(|e| e.to_string())
+                    });
+                    match tokio::time::timeout(timeout, task).await {
+                        Ok(Ok(Ok(()))) => {}
+                        Ok(Ok(Err(e))) => {
+                            error!(type = "overwrite", name = %username, error = %e, "auto-sync failed")
+                        }
+                        Ok(Err(e)) => {
+                            error!(type = "overwrite", name = %username, error = %e, "auto-sync task failed")
+                        }
+                        Err(_) => {
+                            error!(type = "overwrite", name = %username, "auto-sync timed out")
+                        }
+                    }
+                });
+            }
+        }
+        Err(e) => error!(error = %e, "failed to list overwrite plugins for auto-sync"),
+    }
 }
 
 #[cfg(test)]

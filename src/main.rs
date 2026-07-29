@@ -112,8 +112,16 @@ async fn main() {
                         url,
                         name,
                         user_agent,
+                        auto_sync,
+                        timeout,
                     } => {
-                        if let Err(e) = profile::crud::add(&name, &url, user_agent.as_deref()) {
+                        if let Err(e) = profile::crud::add(
+                            &name,
+                            &url,
+                            user_agent.as_deref(),
+                            auto_sync.as_deref(),
+                            timeout.as_deref(),
+                        ) {
                             eprintln!("failed to add profile: {e}");
                             std::process::exit(1);
                         }
@@ -238,6 +246,35 @@ async fn main() {
                     std::process::exit(1);
                 }
                 match action {
+                    OverwriteAction::Add {
+                        username,
+                        link,
+                        kind,
+                        auto_sync,
+                        timeout,
+                    } => {
+                        let parsed_kind = match kind.to_ascii_lowercase().as_str() {
+                            "remote" => overwrite::crud::PluginKind::Remote,
+                            "local" => overwrite::crud::PluginKind::Local,
+                            _ => {
+                                eprintln!("invalid plugin kind: {kind}");
+                                std::process::exit(1);
+                            }
+                        };
+                        match overwrite::crud::add(
+                            &username,
+                            &link,
+                            parsed_kind,
+                            auto_sync.as_deref(),
+                            timeout.as_deref(),
+                        ) {
+                            Ok(dir) => println!("plugin '{}' added at {}", username, dir.display()),
+                            Err(e) => {
+                                eprintln!("add failed: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
                     OverwriteAction::Init { name } => match overwrite::crud::init(&name) {
                         Ok(dir) => println!("plugin '{}' created at {}", name, dir.display()),
                         Err(e) => {
@@ -252,8 +289,20 @@ async fn main() {
                             } else {
                                 for p in &plugins {
                                     let marker = if p.active { " *" } else { "" };
+                                    let kind = match p.kind {
+                                        overwrite::crud::PluginKind::Remote => "remote",
+                                        overwrite::crud::PluginKind::Local => "local",
+                                    };
+                                    let state = if p.has_entry {
+                                        "ready"
+                                    } else {
+                                        "missing entry"
+                                    };
                                     let venv = if p.has_venv { "ok" } else { "no venv" };
-                                    println!("  {} [{}]{}", p.name, venv, marker);
+                                    println!(
+                                        "  {} [{}] [{}]{} {}",
+                                        p.username, kind, state, marker, venv
+                                    );
                                 }
                             }
                         }
@@ -262,6 +311,20 @@ async fn main() {
                             std::process::exit(1);
                         }
                     },
+                    OverwriteAction::Update { username } => {
+                        if let Err(e) = overwrite::crud::update(&username) {
+                            eprintln!("update failed: {e}");
+                            std::process::exit(1);
+                        }
+                        println!("plugin '{}' updated", username);
+                    }
+                    OverwriteAction::Remove { username } => {
+                        if let Err(e) = overwrite::crud::remove(&username) {
+                            eprintln!("remove failed: {e}");
+                            std::process::exit(1);
+                        }
+                        println!("plugin '{}' removed", username);
+                    }
                     OverwriteAction::Use { name } => {
                         if let Err(e) = overwrite::crud::set_active(&name) {
                             eprintln!("failed: {e}");
@@ -343,10 +406,13 @@ bnvr kernel install    Download Mihomo kernel
 bnvr kernel use <ver>  Switch kernel version
 bnvr profile list      List subscriptions
 bnvr profile add       Add subscription
+bnvr profile add <n> <u> --auto-sync 1d  Add daily auto-sync
 bnvr profile sync      Fetch & process config
 bnvr profile use <n>   Activate profile
 bnvr profile merge a b Merge subscriptions
 bnvr overwrite list    List Python plugins
+bnvr overwrite add <u> <link> Clone plugin from Git
+bnvr overwrite update <u>     Pull latest plugin changes
 bnvr overwrite init    Create new plugin
 bnvr network tun setup Take over routing
 bnvr bench [group]     Run network benchmarks

@@ -100,6 +100,12 @@ pub enum ProfileAction {
         /// Override the User-Agent sent when syncing this profile
         #[arg(long)]
         user_agent: Option<String>,
+        /// Auto-sync interval (e.g., "1d")
+        #[arg(long)]
+        auto_sync: Option<String>,
+        /// Sync timeout (e.g., "30s")
+        #[arg(long)]
+        timeout: Option<String>,
     },
     /// Remove a subscription source
     Del { name: String },
@@ -135,16 +141,42 @@ pub enum ProfileAction {
 
 #[derive(Subcommand, Debug)]
 pub enum OverwriteAction {
+    /// Add an overwrite plugin from Git or local directory
+    Add {
+        /// Plugin username (GitHub user or 'local')
+        username: String,
+        /// Git URL or local directory path
+        link: String,
+        /// Plugin kind: remote or local
+        #[arg(long, default_value = "remote")]
+        kind: String,
+        /// Auto-sync interval (e.g., "1d")
+        #[arg(long)]
+        auto_sync: Option<String>,
+        /// Sync timeout (e.g., "30s")
+        #[arg(long)]
+        timeout: Option<String>,
+    },
     /// Create a new overwrite plugin with isolated venv
     Init {
-        /// Plugin module name
+        /// Plugin username
         name: String,
     },
     /// List installed plugins
     List,
+    /// Update an overwrite plugin
+    Update {
+        /// Plugin username
+        username: String,
+    },
+    /// Remove an overwrite plugin
+    Remove {
+        /// Plugin username
+        username: String,
+    },
     /// Activate a plugin
     Use {
-        /// Plugin name to activate
+        /// Plugin username to activate
         name: String,
     },
     /// Run git commands in a plugin's directory

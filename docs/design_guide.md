@@ -80,17 +80,19 @@ bnvr/
 
 ### 3. bnvr profile（多订阅矩阵配置管理）
 
-- `bnvr profile <add / del / list>`：订阅源的基础增删改查 。
-- `bnvr profile sync [name]`：静默拉取指定源，自动格式化并拦截，触发 Python 覆写清洗，最终覆盖内核配置 。
-- `bnvr profile merge <sub_a> <sub_b>... --out`：级联交织合并多个订阅，消除重名节点，一键生成超大临时节点池供后置清洗 。
-- `bnvr profile view [json_path]`：支持点对点路径导航，免打开直接快速查看长配置文件中的某一段（如：`proxies.0`） 。
-- `bnvr profile diff`：对比原始服务商拉取的 Raw YAML 与经过 Python 洗节点处理后的 Target YAML 的属性行差异（支持终端红绿高亮） 。
+- `bnvr profile add <name> <url> [--user-agent UA] [--auto-sync 1d] [--timeout 30s]`：新增远端订阅源；`auto_sync` 与 `timeout` 会写入 `profile/<name>/meta.json`，供 daemon 后台调度使用。
+- `bnvr profile <del / list>`：订阅源的基础删除与列表查看。
+- `bnvr profile sync [name]`：静默拉取指定源，先触发当前 overwrite 插件的 `preprocess`，验证后写入 `raw.yml`，再触发 `postprocess` 并写入 `processed.yml`。
+- `bnvr profile merge <sub_a> <sub_b>... --out`：级联交织合并多个订阅，消除重名节点，一键生成超大临时节点池供后置清洗。
+- `bnvr profile view [json_path]`：支持点对点路径导航，免打开直接快速查看长配置文件中的某一段（如：`proxies.0`）。
+- `bnvr profile diff`：对比原始服务商拉取的 Raw YAML 与经过 Python 洗节点处理后的 Target YAML 的属性行差异（支持终端红绿高亮）。
 
 ### 4. bnvr overwrite（Python 覆写插件管理与 Git 缝合）
 
-- `bnvr overwrite init <module_name>`：**【高阶环境隔离】** 新增模块时，Rust 自动调用 `uv venv` 在该插件目录下生成**独立且完全隔离的 Python 虚拟环境**，并生成 `requirements.txt` 。彻底杜绝用户的第三方库污染系统级环境 。
-- `bnvr overwrite <list / use>`：管理与激活不同的 Python 策略插件 。
-- `bnvr overwrite git <args...>`：**【极客透传机制】** 自动切入该模块的物理 `.git` 目录，将后续所有参数原地透传给系统的 Git 工具（例如：运行 `bnvr overwrite git pull` 即可无感拉取开源社区中别人的高级清洗规则仓库） 。
+- `bnvr overwrite add <username> <link> [--kind remote|local] [--auto-sync 1d] [--timeout 30s]`：从 Git URL、`owner/repo` 或本地目录安装插件。插件目录为 `overwrite/<username>/overwrite/`，元数据为同级 `overwrite/<username>/meta.json`。
+- `bnvr overwrite init <username>`：创建本地插件，写入默认 `meta.json`，并在 `overwrite/<username>/overwrite/` 下生成 `overwrite.py` 与独立 Python 虚拟环境。
+- `bnvr overwrite <list / use / update / remove>`：管理、激活、拉取更新或删除插件；remote 插件执行 `git pull`，local 插件不通过 Git 更新。
+- `bnvr overwrite git <args...>`：自动切入当前激活插件的 `overwrite/<username>/overwrite/` 目录，将后续所有参数原地透传给系统 Git 工具。
 
 ### 5. bnvr network（网络层与系统级接管）
 
@@ -116,6 +118,27 @@ bnvr/
 3. **用户层调用**：Python 脚本利用原生的 `sys.stdin.read()` 接收解析，用户可以直接用最纯粹的字典推导式（List/Dict Comprehension）完成高效清洗，处理完成后通过标准输出（stdout）把 JSON 吐回给 Rust 。
 
 > **四类全生命周期钩子规范：** 用户自定义的插件必须暴露一个标准的 `overwrite` 包名，且 `__init__.py` 必须实现或选择性覆盖以下四类全生命周期的钩子函数 ： * `preprocess(config: dict) -> dict`：前置配置钩子。订阅刚下载、内核尚未解析时触发 。 * `postprocess(config: dict) -> dict`：后置裁剪钩子。节点池拼装完毕后，利用 Python 字典推导式高效过滤垃圾节点 。 * `on_node_switch(old_node: dict, new_node: dict)`：事件响应。当用户在 TUI 界面手动切节点、或自动化测速切节点时异步触发（例如可在这里调用系统通知组件） 。 * `on_network_dropped()`：异常感知。当检测到当前激活节点彻底断网，或延迟连续多次炸裂时触发（可用于驱动自愈脚本） 。
+
+### 4.1.1 overwrite metadata schema
+
+`overwrite/<username>/meta.json` 示例：
+
+```json
+{
+  "kind": "remote",
+  "link": "https://github.com/example/overwrite-plugin",
+  "created_at": 1785319200,
+  "updated_at": 1785322800,
+  "auto_sync": "1d",
+  "timeout": "30s"
+}
+```
+
+- `kind`：`remote` 或 `local`。
+- `link`：Git URL、`owner/repo` 解析后的 URL，或本地插件源目录。
+- `created_at` / `updated_at`：Unix 秒级时间戳。
+- `auto_sync`：daemon 每 60 秒检查一次，到期后自动同步 profile 或 overwrite 插件。支持 `y`、`d`、`m`、`s` 后缀。
+- `timeout`：单次同步超时时间；当 `auto_sync < timeout` 时运行时按 timeout 钳制。
 
 ### 4.2 Rust 侧 IPC Timeout 熔断保护
 

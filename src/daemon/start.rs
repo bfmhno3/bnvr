@@ -31,6 +31,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let monitor_handle = km.spawn_monitor();
+    let health_handle = tokio::spawn(super::core::start_health_monitor(daemon_state.clone()));
+    let auto_sync_handle =
+        tokio::spawn(super::core::start_auto_sync_scheduler(daemon_state.clone()));
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
     let state_for_ipc = daemon_state.clone();
@@ -69,6 +72,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     monitor_handle.abort();
     ipc_handle.abort();
+    health_handle.abort();
+    auto_sync_handle.abort();
 
     let _ = fs::remove_file(&pid_path);
     info!("daemon stopped");

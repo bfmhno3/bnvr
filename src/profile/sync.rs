@@ -1,10 +1,10 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use tracing::info;
+use tracing::{error, info};
 
 use super::crud::{self, ProfileKind};
-use crate::paths;
+use crate::{overwrite, paths};
 
 const DEFAULT_USER_AGENT: &str = concat!("clash-verge/v", env!("CARGO_PKG_VERSION"));
 
@@ -64,11 +64,58 @@ pub async fn sync_one(name: &str) -> Result<SyncResult, Box<dyn Error>> {
         .ok_or_else(|| format!("profile {name} has no url"))?;
     info!(name = %profile.name, url = %url, "syncing profile");
 
-    let content = fetch_yaml(url, profile.meta.user_agent.as_deref()).await?;
+    let mut content = fetch_yaml(url, profile.meta.user_agent.as_deref()).await?;
+    if let Some(active_plugin) = overwrite::crud::get_active() {
+        match overwrite::bridge::run_hook(
+            &active_plugin,
+            "preprocess",
+            serde_json::to_value(&content)?,
+            serde_json::Value::Null,
+        )
+        .await
+        {
+            Ok(value) => {
+                content = match value {
+                    serde_json::Value::String(value) => value,
+                    other => serde_yaml::to_string(&other)?,
+                };
+                info!(plugin = %active_plugin, hook = "preprocess", profile = %name, "ran overwrite hook");
+            }
+            Err(e) => {
+                error!(plugin = %active_plugin, hook = "preprocess", error = %e, "hook failed")
+            }
+        }
+    }
     validate_config(&content)?;
     let bytes = content.len();
     let path = paths::profile_raw_file(name);
     crud::write_atomic(&path, &content)?;
+
+    let mut processed = content.clone();
+    if let Some(active_plugin) = overwrite::crud::get_active() {
+        match serde_yaml::from_str::<serde_json::Value>(&processed) {
+            Ok(value) => match overwrite::bridge::run_hook(
+                &active_plugin,
+                "postprocess",
+                value,
+                serde_json::Value::Null,
+            )
+            .await
+            {
+                Ok(value) => {
+                    processed = serde_yaml::to_string(&value)?;
+                    info!(plugin = %active_plugin, hook = "postprocess", profile = %name, "ran overwrite hook");
+                }
+                Err(e) => {
+                    error!(plugin = %active_plugin, hook = "postprocess", error = %e, "hook failed")
+                }
+            },
+            Err(e) => {
+                error!(plugin = %active_plugin, hook = "postprocess", error = %e, "hook failed")
+            }
+        }
+    }
+    crud::write_atomic(&paths::profile_processed_file(name), &processed)?;
 
     let mut meta = profile.meta;
     meta.updated_at = Some(crud::now_secs());
@@ -154,8 +201,8 @@ mod tests {
         let (bad_url, _) = start_test_http_server(
             "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n",
         );
-        crud::add("bad", &bad_url, None).unwrap();
-        crud::add("good", &good_url, None).unwrap();
+        crud::add("bad", &bad_url, None, None, None).unwrap();
+        crud::add("good", &good_url, None, None, None).unwrap();
 
         let result = sync_all().await.unwrap();
         assert_eq!(result.synced.len(), 1);

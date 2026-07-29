@@ -199,6 +199,8 @@ pub fn merge(sources: &[String], out: Option<&str>) -> Result<MergeResult, Box<d
         sources: sources.to_vec(),
         created_at,
         updated_at: Some(crud::now_secs()),
+        auto_sync: None,
+        timeout: None,
     };
     crud::write_meta(&name, &meta)?;
     crud::refresh_active_config_plain(&name)?;

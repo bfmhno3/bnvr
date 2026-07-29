@@ -29,7 +29,7 @@ async fn test_sync_writes_raw_yaml_to_profile_dir() {
     let (tmp, _guard) = setup("sync-writes-raw");
     let body = "proxies: []\n";
     let (url, _) = start_test_http_server(ok_response(body));
-    crud::add("alpha", &url, None).unwrap();
+    crud::add("alpha", &url, None, None, None).unwrap();
 
     sync::sync_one("alpha").await.unwrap();
 
@@ -47,7 +47,7 @@ async fn test_sync_writes_raw_yaml_to_profile_dir() {
 async fn test_sync_sends_clash_user_agent() {
     let (tmp, _guard) = setup("sync-ua");
     let (url, request) = start_test_http_server(ok_response("proxies: []\n"));
-    crud::add("alpha", &url, None).unwrap();
+    crud::add("alpha", &url, None, None, None).unwrap();
 
     sync::sync_one("alpha").await.unwrap();
 
@@ -65,7 +65,7 @@ async fn test_sync_sends_clash_user_agent() {
 async fn test_sync_rejects_non_yaml_body() {
     let (tmp, _guard) = setup("sync-rejects-html");
     let (url, _) = start_test_http_server(ok_response("<html>login</html>"));
-    crud::add("alpha", &url, None).unwrap();
+    crud::add("alpha", &url, None, None, None).unwrap();
 
     let err = sync::sync_one("alpha").await.unwrap_err();
 
@@ -79,7 +79,7 @@ async fn test_sync_rejects_non_yaml_body() {
 async fn test_use_materializes_mihomo_config() {
     let (tmp, _guard) = setup("use-materializes");
     let (url, _) = start_test_http_server(ok_response("proxies: []\n"));
-    crud::add("alpha", &url, None).unwrap();
+    crud::add("alpha", &url, None, None, None).unwrap();
     sync::sync_one("alpha").await.unwrap();
 
     crud::activate("alpha").await.unwrap();
@@ -97,8 +97,8 @@ async fn test_use_materializes_mihomo_config() {
 #[test]
 fn test_merge_writes_merge_profile() {
     let (tmp, _guard) = setup("merge-writes");
-    crud::add("alpha", "http://example.com/a.yml", None).unwrap();
-    crud::add("beta", "http://example.com/b.yml", None).unwrap();
+    crud::add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
+    crud::add("beta", "http://example.com/b.yml", None, None, None).unwrap();
     crud::write_atomic(&paths::profile_raw_file("alpha"), "proxies:\n  - {name: a1, type: ss, server: 1.1.1.1, port: 443, password: pw1}\n  - {name: a2, type: ss, server: 2.2.2.2, port: 443, password: pw2}\n").unwrap();
     crud::write_atomic(&paths::profile_raw_file("beta"), "proxies:\n  - {name: b1, type: ss, server: 1.1.1.1, port: 443, password: pw1}\n  - {name: b2, type: ss, server: 3.3.3.3, port: 443, password: pw3}\n").unwrap();
 
@@ -127,7 +127,7 @@ fn test_merge_writes_merge_profile() {
 #[test]
 fn test_del_removes_directory_and_clears_active() {
     let (tmp, _guard) = setup("del-removes");
-    crud::add("alpha", "http://example.com/a.yml", None).unwrap();
+    crud::add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
     crud::write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
     crud::activate_plain("alpha").unwrap();
 
@@ -135,6 +135,24 @@ fn test_del_removes_directory_and_clears_active() {
 
     assert!(!paths::profile_dir("alpha").exists());
     assert!(!paths::active_profile_file().exists());
+    cleanup(&tmp);
+}
+
+#[test]
+fn test_profile_auto_sync_metadata() {
+    let (tmp, _guard) = setup("auto-sync-meta");
+    crud::add(
+        "alpha",
+        "http://example.com/a.yml",
+        None,
+        Some("1d"),
+        Some("30s"),
+    )
+    .unwrap();
+
+    let meta = crud::read_meta("alpha").unwrap();
+    assert_eq!(meta.auto_sync.as_deref(), Some("1d"));
+    assert_eq!(meta.timeout.as_deref(), Some("30s"));
     cleanup(&tmp);
 }
 

@@ -27,6 +27,10 @@ pub struct ProfileMeta {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_sync: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 #[derive(Debug)]
@@ -66,8 +70,15 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn add(name: &str, url: &str, user_agent: Option<&str>) -> Result<(), Box<dyn Error>> {
+pub fn add(
+    name: &str,
+    url: &str,
+    user_agent: Option<&str>,
+    auto_sync: Option<&str>,
+    timeout: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
     paths::validate_component(name, "profile name")?;
+    crate::utilities::validate_auto_sync_timeout(auto_sync, timeout)?;
     let dir = paths::profile_dir(name);
     if dir.exists() {
         return Err(format!("profile already exists: {name}").into());
@@ -80,6 +91,8 @@ pub fn add(name: &str, url: &str, user_agent: Option<&str>) -> Result<(), Box<dy
         sources: Vec::new(),
         created_at: now_secs(),
         updated_at: None,
+        auto_sync: auto_sync.map(str::to_string),
+        timeout: timeout.map(str::to_string),
     };
     write_meta(name, &meta)?;
     Ok(())
@@ -306,7 +319,14 @@ mod tests {
     #[test]
     fn test_add_get_roundtrip() {
         let (tmp, _guard) = setup("add-get");
-        add("alpha", "http://example.com/a.yml", Some("ua/1")).unwrap();
+        add(
+            "alpha",
+            "http://example.com/a.yml",
+            Some("ua/1"),
+            None,
+            None,
+        )
+        .unwrap();
         let info = get("alpha").unwrap();
         assert_eq!(info.name, "alpha");
         assert_eq!(info.meta.kind, ProfileKind::Remote);
@@ -319,8 +339,8 @@ mod tests {
     #[test]
     fn test_duplicate_add_rejected() {
         let (tmp, _guard) = setup("duplicate-add");
-        add("alpha", "http://example.com/a.yml", None).unwrap();
-        let err = add("alpha", "http://example.com/b.yml", None).unwrap_err();
+        add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
+        let err = add("alpha", "http://example.com/b.yml", None, None, None).unwrap_err();
         assert_eq!(err.to_string(), "profile already exists: alpha");
         cleanup(&tmp);
     }
@@ -328,7 +348,7 @@ mod tests {
     #[test]
     fn test_del_clears_active() {
         let (tmp, _guard) = setup("del-clears-active");
-        add("alpha", "http://example.com/a.yml", None).unwrap();
+        add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
         write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
         activate_plain("alpha").unwrap();
         del("alpha").unwrap();
@@ -339,8 +359,8 @@ mod tests {
     #[test]
     fn test_list_sorts_and_skips_dotfiles() {
         let (tmp, _guard) = setup("list-sorts");
-        add("beta", "http://example.com/b.yml", None).unwrap();
-        add("alpha", "http://example.com/a.yml", None).unwrap();
+        add("beta", "http://example.com/b.yml", None, None, None).unwrap();
+        add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
         fs::create_dir_all(paths::profiles_dir().join(".hidden")).unwrap();
         let profiles = list().unwrap();
         assert_eq!(profiles.len(), 2);
@@ -352,7 +372,7 @@ mod tests {
     #[test]
     fn test_effective_config_prefers_processed() {
         let (tmp, _guard) = setup("effective-config");
-        add("alpha", "http://example.com/a.yml", None).unwrap();
+        add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
         write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
         write_atomic(
             &paths::profile_processed_file("alpha"),
@@ -379,7 +399,7 @@ mod tests {
     #[test]
     fn test_activate_writes_config_yaml() {
         let (tmp, _guard) = setup("activate");
-        add("alpha", "http://example.com/a.yml", None).unwrap();
+        add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
         write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
         let path = activate_plain("alpha").unwrap();
         assert_eq!(path, paths::mihomo_config_file());
@@ -392,7 +412,7 @@ mod tests {
     #[test]
     fn test_effective_config_strips_tun_and_dns() {
         let (tmp, _guard) = setup("strips-managed");
-        add("alpha", "http://example.com/a.yml", None).unwrap();
+        add("alpha", "http://example.com/a.yml", None, None, None).unwrap();
         write_atomic(
             &paths::profile_raw_file("alpha"),
             "proxies: []\ntun:\n  enable: true\ndns:\n  enable: true\n",

@@ -1,5 +1,6 @@
 use super::core::KernelManager;
 use super::process;
+use super::state::DaemonState;
 use crate::paths;
 use std::fs;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     info!(pid, "daemon starting");
 
     let km = Arc::new(KernelManager::new());
+    let daemon_state = Arc::new(DaemonState::new(km.clone()));
 
     match km.start().await {
         Ok(kpid) => info!(kernel_pid = kpid, "kernel started"),
@@ -31,9 +33,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let monitor_handle = km.spawn_monitor();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let km_for_ipc = km.clone();
+    let state_for_ipc = daemon_state.clone();
     let ipc_handle = tokio::spawn(async move {
-        if let Err(e) = super::ipc::listen_with_kernel(km_for_ipc, shutdown_tx).await {
+        if let Err(e) = super::ipc::listen_with_state(state_for_ipc, shutdown_tx).await {
             error!("IPC listener failed: {e}");
         }
     });
@@ -54,6 +56,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+
+    if let Err(e) = daemon_state.tun.lock().await.clear() {
+        info!("TUN cleanup: {e}");
+    }
 
     if km.status().await.running
         && let Err(e) = km.stop().await

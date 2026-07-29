@@ -8,7 +8,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::watch;
 use tracing::{error, info};
 
-use super::core::KernelManager;
+use super::state::DaemonState;
+use crate::{daemon::db, network::bypass, profile::crud};
 
 const SOCKET_NAME: &str = "bnvr";
 
@@ -30,8 +31,19 @@ pub struct Response {
 }
 
 struct IpcState {
-    kernel: Option<Arc<KernelManager>>,
+    daemon: Option<Arc<DaemonState>>,
     shutdown: watch::Sender<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BypassParams {
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TunContext {
+    pub device: String,
+    pub bypass_routes: Vec<String>,
 }
 
 pub async fn listen() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,23 +51,23 @@ pub async fn listen() -> Result<(), Box<dyn std::error::Error>> {
     listen_on(SOCKET_NAME, None, shutdown).await
 }
 
-pub async fn listen_with_kernel(
-    km: Arc<KernelManager>,
+pub async fn listen_with_state(
+    daemon: Arc<DaemonState>,
     shutdown: watch::Sender<bool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    listen_on(SOCKET_NAME, Some(km), shutdown).await
+    listen_on(SOCKET_NAME, Some(daemon), shutdown).await
 }
 
 pub async fn listen_on(
     name: &str,
-    kernel: Option<Arc<KernelManager>>,
+    daemon: Option<Arc<DaemonState>>,
     shutdown: watch::Sender<bool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ns_name = name.to_ns_name::<GenericNamespaced>()?;
     let listener = ListenerOptions::new().name(ns_name).create_tokio()?;
     info!("IPC listening on {name}");
 
-    let state = Arc::new(IpcState { kernel, shutdown });
+    let state = Arc::new(IpcState { daemon, shutdown });
 
     loop {
         let stream = listener.accept().await?;
@@ -81,6 +93,25 @@ pub async fn send_request(request: &Request) -> Result<Response, Box<dyn std::er
     let mut line = String::new();
     reader.read_line(&mut line).await?;
     Ok(serde_json::from_str(&line)?)
+}
+
+pub async fn tun_context() -> Result<Option<TunContext>, Box<dyn std::error::Error>> {
+    let request = Request {
+        id: 1,
+        method: "tun_context".to_string(),
+        params: serde_json::Value::Null,
+    };
+    let response = match send_request(&request).await {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+    if let Some(error) = response.error {
+        return Err(error.into());
+    }
+    match response.result {
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(value) => serde_json::from_value(value).map(Some).map_err(Into::into),
+    }
 }
 
 async fn handle_connection(
@@ -142,35 +173,98 @@ async fn handle_request(
             Ok(serde_json::json!(null))
         }
         "kernel.start" => {
-            let km = state
-                .kernel
-                .as_ref()
-                .ok_or("kernel manager not available")?;
-            let pid = km.start().await?;
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            let pid = daemon.kernel.start().await?;
             Ok(serde_json::json!({ "pid": pid }))
         }
         "kernel.stop" => {
-            let km = state
-                .kernel
-                .as_ref()
-                .ok_or("kernel manager not available")?;
-            km.stop().await?;
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            daemon.kernel.stop().await?;
             Ok(serde_json::json!(null))
         }
         "kernel.status" => {
-            let km = state
-                .kernel
-                .as_ref()
-                .ok_or("kernel manager not available")?;
-            let s = km.status().await;
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            let s = daemon.kernel.status().await;
             Ok(serde_json::json!({
                 "running": s.running,
                 "pid": s.pid,
                 "version": s.version,
             }))
         }
+        "tun_setup" => {
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            let device_name = {
+                let mut tun = daemon.tun.lock().await;
+                tun.setup()?;
+                tun.device_name().unwrap_or_default().to_string()
+            };
+            reload_active_profile(daemon, Some(&device_name)).await?;
+            restart_kernel(&daemon.kernel).await?;
+            Ok(serde_json::json!({ "device": device_name }))
+        }
+        "tun_clear" => {
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            {
+                let mut tun = daemon.tun.lock().await;
+                tun.clear()?;
+            }
+            reload_active_profile(daemon, None).await?;
+            restart_kernel(&daemon.kernel).await?;
+            Ok(serde_json::json!(null))
+        }
+        "tun_context" => {
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            let device = {
+                let tun = daemon.tun.lock().await;
+                tun.device_name().map(str::to_string)
+            };
+            if let Some(device) = device {
+                let conn = db::open()?;
+                let bypass_routes = db::list_bypass_routes(&conn)?;
+                Ok(serde_json::json!({ "device": device, "bypass_routes": bypass_routes }))
+            } else {
+                Ok(serde_json::Value::Null)
+            }
+        }
+        "add_bypass" => {
+            let daemon = state.daemon.as_ref().ok_or("daemon state not available")?;
+            let params: BypassParams = serde_json::from_value(req.params.clone())?;
+            let target = bypass::normalize_target(&params.target)?;
+            let conn = db::open()?;
+            db::add_bypass_route(&conn, &target)?;
+            let device = {
+                let tun = daemon.tun.lock().await;
+                tun.device_name().map(str::to_string)
+            };
+            reload_active_profile(daemon, device.as_deref()).await?;
+            Ok(serde_json::json!({ "target": target }))
+        }
         _ => Err(format!("unknown method: {}", req.method).into()),
     }
+}
+
+async fn reload_active_profile(
+    daemon: &DaemonState,
+    device_name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = crud::get_active() else {
+        return Ok(());
+    };
+    let conn = db::open()?;
+    let bypass_routes = db::list_bypass_routes(&conn)?;
+    crud::materialize_config_with_tun(&active, device_name, &bypass_routes)?;
+    let _ = daemon;
+    Ok(())
+}
+
+async fn restart_kernel(
+    kernel: &super::core::KernelManager,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if kernel.status().await.running {
+        kernel.stop().await?;
+        let _pid = kernel.start().await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

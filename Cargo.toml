@@ -20,6 +20,12 @@ flate2 = "1"
 zip = "2"
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
+ipnetwork = "0.20"
+pnet = "0.34"
+tun2 = "4.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+caps = "0.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -29,4 +35,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_UI_Shell",
 ] }
+wintun = "0.5"

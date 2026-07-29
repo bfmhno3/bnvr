@@ -1,5 +1,6 @@
 pub mod daemon;
 pub mod kernel;
+pub mod network;
 pub mod overwrite;
 pub mod paths;
 pub mod profile;

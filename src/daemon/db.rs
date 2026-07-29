@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 use crate::paths;
 
@@ -40,7 +40,34 @@ pub fn init_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> 
             bytes_down  INTEGER NOT NULL DEFAULT 0,
             recorded_at TEXT    NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS bypass_routes (
+            target      TEXT    PRIMARY KEY,
+            created_at  INTEGER NOT NULL
+        );
+
         ",
+    )?;
+    Ok(())
+}
+
+pub fn add_bypass_route(conn: &Connection, target: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO bypass_routes (target, created_at) VALUES (?1, strftime('%s', 'now'))",
+        params![target],
+    )?;
+    Ok(())
+}
+
+pub fn list_bypass_routes(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT target FROM bypass_routes ORDER BY target")?;
+    stmt.query_map([], |row| row.get(0))?.collect()
+}
+
+pub fn remove_bypass_route(conn: &Connection, target: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM bypass_routes WHERE target = ?1",
+        params![target],
     )?;
     Ok(())
 }
@@ -66,6 +93,7 @@ mod tests {
         assert!(tables.contains(&"audit_log".to_string()));
         assert!(tables.contains(&"bench_results".to_string()));
         assert!(tables.contains(&"traffic_stats".to_string()));
+        assert!(tables.contains(&"bypass_routes".to_string()));
     }
 
     #[test]
@@ -134,5 +162,24 @@ mod tests {
 
         assert_eq!(bytes_up, 0);
         assert_eq!(bytes_down, 0);
+    }
+
+    #[test]
+    fn test_bypass_route_helpers_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        add_bypass_route(&conn, "10.0.0.1/32").unwrap();
+        add_bypass_route(&conn, "192.168.1.0/24").unwrap();
+        assert_eq!(
+            list_bypass_routes(&conn).unwrap(),
+            vec!["10.0.0.1/32".to_string(), "192.168.1.0/24".to_string()]
+        );
+
+        remove_bypass_route(&conn, "10.0.0.1/32").unwrap();
+        assert_eq!(
+            list_bypass_routes(&conn).unwrap(),
+            vec!["192.168.1.0/24".to_string()]
+        );
     }
 }

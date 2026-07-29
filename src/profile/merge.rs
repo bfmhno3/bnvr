@@ -201,7 +201,7 @@ pub fn merge(sources: &[String], out: Option<&str>) -> Result<MergeResult, Box<d
         updated_at: Some(crud::now_secs()),
     };
     crud::write_meta(&name, &meta)?;
-    crud::refresh_active_config(&name)?;
+    crud::refresh_active_config_plain(&name)?;
     info!(name = %name, proxies = stats.proxies, dropped = stats.dropped, "merge complete");
     Ok(MergeResult { name, stats })
 }

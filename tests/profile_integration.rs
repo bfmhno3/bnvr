@@ -82,7 +82,7 @@ async fn test_use_materializes_mihomo_config() {
     crud::add("alpha", &url, None).unwrap();
     sync::sync_one("alpha").await.unwrap();
 
-    crud::activate("alpha").unwrap();
+    crud::activate("alpha").await.unwrap();
 
     let value: serde_yaml::Value =
         serde_yaml::from_str(&fs::read_to_string(paths::mihomo_config_file()).unwrap()).unwrap();
@@ -129,7 +129,7 @@ fn test_del_removes_directory_and_clears_active() {
     let (tmp, _guard) = setup("del-removes");
     crud::add("alpha", "http://example.com/a.yml", None).unwrap();
     crud::write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
-    crud::activate("alpha").unwrap();
+    crud::activate_plain("alpha").unwrap();
 
     crud::del("alpha").unwrap();
 

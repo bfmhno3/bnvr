@@ -73,7 +73,7 @@ pub async fn sync_one(name: &str) -> Result<SyncResult, Box<dyn Error>> {
     let mut meta = profile.meta;
     meta.updated_at = Some(crud::now_secs());
     crud::write_meta(name, &meta)?;
-    crud::refresh_active_config(name)?;
+    crud::refresh_active_config(name).await?;
 
     info!(name = %name, bytes, "sync complete");
 

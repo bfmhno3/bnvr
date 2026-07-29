@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::paths;
+use crate::{daemon::ipc, network::config, paths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -180,10 +180,34 @@ pub fn read_processed(name: &str) -> Option<String> {
 }
 
 pub fn effective_config(name: &str) -> Result<String, Box<dyn Error>> {
-    match read_processed(name) {
-        Some(content) => Ok(content),
-        None => read_raw(name),
+    let content = match read_processed(name) {
+        Some(content) => content,
+        None => read_raw(name)?,
+    };
+    strip_mihomo_managed_fields(name, &content)
+}
+
+pub fn strip_mihomo_managed_fields(name: &str, yaml: &str) -> Result<String, Box<dyn Error>> {
+    let mut value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+    let Some(mapping) = value.as_mapping_mut() else {
+        return serde_yaml::to_string(&value).map_err(Into::into);
+    };
+
+    let mut stripped = Vec::new();
+    for field in ["tun", "dns"] {
+        if mapping
+            .remove(serde_yaml::Value::String(field.to_string()))
+            .is_some()
+        {
+            stripped.push(field);
+        }
     }
+
+    if !stripped.is_empty() {
+        info!(profile = %name, stripped = ?stripped, "removed kernel-managed config fields");
+    }
+
+    serde_yaml::to_string(&value).map_err(Into::into)
 }
 
 pub fn get_active() -> Option<String> {
@@ -202,7 +226,16 @@ pub fn set_active(name: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn activate(name: &str) -> Result<PathBuf, Box<dyn Error>> {
+pub async fn activate(name: &str) -> Result<PathBuf, Box<dyn Error>> {
+    set_active(name)?;
+    let path = paths::mihomo_config_file();
+    let content = config_for_current_tun(name).await?;
+    write_atomic(&path, &content)?;
+    info!(name = %name, path = %path.display(), "active profile set");
+    Ok(path)
+}
+
+pub fn activate_plain(name: &str) -> Result<PathBuf, Box<dyn Error>> {
     set_active(name)?;
     let path = paths::mihomo_config_file();
     write_atomic(&path, &effective_config(name)?)?;
@@ -217,11 +250,41 @@ pub fn resolve(name: Option<&str>) -> Result<String, Box<dyn Error>> {
     get_active().ok_or_else(|| "no active profile (run `bnvr profile use <name>`)".into())
 }
 
-pub fn refresh_active_config(name: &str) -> Result<(), Box<dyn Error>> {
+pub async fn refresh_active_config(name: &str) -> Result<(), Box<dyn Error>> {
+    if get_active().as_deref() == Some(name) {
+        let content = config_for_current_tun(name).await?;
+        write_atomic(&paths::mihomo_config_file(), &content)?;
+    }
+    Ok(())
+}
+
+pub fn refresh_active_config_plain(name: &str) -> Result<(), Box<dyn Error>> {
     if get_active().as_deref() == Some(name) {
         write_atomic(&paths::mihomo_config_file(), &effective_config(name)?)?;
     }
     Ok(())
+}
+
+pub fn materialize_config_with_tun(
+    name: &str,
+    device_name: Option<&str>,
+    bypass_routes: &[String],
+) -> Result<PathBuf, Box<dyn Error>> {
+    let path = paths::mihomo_config_file();
+    let mut content = effective_config(name)?;
+    if let Some(device_name) = device_name {
+        content = config::inject_tun_config(&content, device_name, bypass_routes)?;
+    }
+    write_atomic(&path, &content)?;
+    Ok(path)
+}
+
+async fn config_for_current_tun(name: &str) -> Result<String, Box<dyn Error>> {
+    let mut content = effective_config(name)?;
+    if let Some(context) = ipc::tun_context().await? {
+        content = config::inject_tun_config(&content, &context.device, &context.bypass_routes)?;
+    }
+    Ok(content)
 }
 
 #[cfg(test)]
@@ -267,7 +330,7 @@ mod tests {
         let (tmp, _guard) = setup("del-clears-active");
         add("alpha", "http://example.com/a.yml", None).unwrap();
         write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
-        activate("alpha").unwrap();
+        activate_plain("alpha").unwrap();
         del("alpha").unwrap();
         assert!(!paths::active_profile_file().exists());
         cleanup(&tmp);
@@ -296,7 +359,9 @@ mod tests {
             "proxies: [processed]\n",
         )
         .unwrap();
-        assert_eq!(effective_config("alpha").unwrap(), "proxies: [processed]\n");
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(&effective_config("alpha").unwrap()).unwrap();
+        assert_eq!(value["proxies"][0], "processed");
         cleanup(&tmp);
     }
 
@@ -316,9 +381,30 @@ mod tests {
         let (tmp, _guard) = setup("activate");
         add("alpha", "http://example.com/a.yml", None).unwrap();
         write_atomic(&paths::profile_raw_file("alpha"), "proxies: []\n").unwrap();
-        let path = activate("alpha").unwrap();
+        let path = activate_plain("alpha").unwrap();
         assert_eq!(path, paths::mihomo_config_file());
-        assert_eq!(fs::read_to_string(path).unwrap(), "proxies: []\n");
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert!(value.as_mapping().unwrap().contains_key("proxies"));
+        cleanup(&tmp);
+    }
+
+    #[test]
+    fn test_effective_config_strips_tun_and_dns() {
+        let (tmp, _guard) = setup("strips-managed");
+        add("alpha", "http://example.com/a.yml", None).unwrap();
+        write_atomic(
+            &paths::profile_raw_file("alpha"),
+            "proxies: []\ntun:\n  enable: true\ndns:\n  enable: true\n",
+        )
+        .unwrap();
+
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(&effective_config("alpha").unwrap()).unwrap();
+        let map = value.as_mapping().unwrap();
+        assert!(map.contains_key("proxies"));
+        assert!(!map.contains_key("tun"));
+        assert!(!map.contains_key("dns"));
         cleanup(&tmp);
     }
 }

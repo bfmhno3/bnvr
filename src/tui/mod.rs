@@ -1,5 +1,7 @@
+pub mod actions;
 pub mod app;
 pub mod event;
+pub mod log_reader;
 pub mod view;
 
 use crossterm::{
@@ -9,10 +11,11 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use app::AppState;
-use event::AppEvent;
+use event::{AppEvent, AsyncAction};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = TerminalSession::new()?;
@@ -84,22 +87,33 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = AppState::new();
-
     state.daemon_connected = try_connect_daemon().await;
+    let _ = state.refresh_all().await;
 
-    let (tx, mut rx) = mpsc::channel(32);
+    let (tx, mut rx) = mpsc::channel(100);
     tokio::spawn(event::run_event_loop(tx));
+    let mut refresh_interval = tokio::time::interval(Duration::from_secs(1));
+    let mut log_interval = tokio::time::interval(Duration::from_millis(200));
 
     loop {
         terminal.draw(|frame| view::render(frame, &state))?;
 
-        if let Some(app_event) = rx.recv().await {
-            match app_event {
-                AppEvent::Key(key) => event::handle_key(key, &mut state),
+        tokio::select! {
+            Some(app_event) = rx.recv() => match app_event {
+                AppEvent::Key(key) => {
+                    if let Some(action) = event::handle_key(key, &mut state) {
+                        handle_async_action(action, &mut state).await;
+                    }
+                }
                 AppEvent::Tick => {}
+            },
+            _ = refresh_interval.tick() => {
+                let _ = state.refresh_status().await;
+                let _ = state.refresh_traffic().await;
             }
-        } else {
-            break;
+            _ = log_interval.tick() => {
+                let _ = state.refresh_logs();
+            }
         }
 
         if state.should_quit {
@@ -108,6 +122,21 @@ async fn run_app(
     }
 
     Ok(())
+}
+
+async fn handle_async_action(action: AsyncAction, state: &mut AppState) {
+    match action {
+        AsyncAction::SwitchNode(name) => {
+            if actions::switch_node(&name).await.is_ok() {
+                let _ = state.refresh_nodes().await;
+            }
+        }
+        AsyncAction::TestNode(name) => {
+            if let Ok(delay) = actions::test_node_delay(&name).await {
+                state.set_node_delay(&name, delay);
+            }
+        }
+    }
 }
 
 async fn try_connect_daemon() -> bool {

@@ -1,3 +1,5 @@
+pub mod mihomo_api;
+
 use std::error::Error;
 use std::time::Duration;
 
